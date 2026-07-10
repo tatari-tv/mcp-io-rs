@@ -723,3 +723,14 @@ the parallel `slack-cli-capability-expansion` branch.
   entry into an isolated `CLAUDE_CONFIG_DIR`, then `slack mcp status`
   confirming it. The live tool-call AC should be confirmed once during the PR
   shakedown.
+
+### Superseded (v0.1.1)
+- The two entries above that use `McpIo::new("slack", ...)` directly and state
+  that `mcp_io!` "cannot override `bin`" describe the **v0.1.0-era** slack-cli
+  integration, and are HISTORICAL. **v0.1.1 (mcp-io-rs #3) adds a `bin =`
+  override to `mcp_io!`** (mirroring `renew!(bin = "...")`), so the macro is now
+  the sole seam and the direct `McpIo::new` workaround is removed. The current
+  recommendation for a host whose crate name differs from its binary is
+  `mcp_io!(bin = "slack")` (with `key = ..., bin = ...` when the registration
+  key also differs). slack-cli is rewired to `mcp_io!(bin = "slack")` when it
+  consumes `v0.1.1`.
