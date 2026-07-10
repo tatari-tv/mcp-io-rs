@@ -36,13 +36,20 @@ fn test_run_status_returns_success() {
     assert_eq!(cmd.run(&make_io(), build_dummy), 0);
 }
 
+// Inverted from the Phase-1 `should_panic(expected = "Phase 5")` stub: the
+// bundle arm is real as of Phase 5. `McpCmd::run` is a sync entry point that
+// spins its own tokio runtime (mirroring `run_serve`), so driving it here
+// (rather than only in `src/bundle/tests.rs`) proves the dispatch AND runtime
+// wiring, not just `bundle()`'s internals.
 #[test]
-#[should_panic(expected = "Phase 5")]
-fn test_run_bundle_dispatches_to_phase5_stub() {
+fn test_run_bundle_dispatches_and_writes_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("test.mcpb");
     let cmd = McpCmd {
-        cmd: McpSub::Bundle { out: None },
+        cmd: McpSub::Bundle { out: Some(out.clone()) },
     };
-    cmd.run(&make_io(), build_dummy);
+    assert_eq!(cmd.run(&make_io(), build_dummy), 0);
+    assert!(out.is_file(), "expected a .mcpb file at {}", out.display());
 }
 
 #[derive(Parser)]

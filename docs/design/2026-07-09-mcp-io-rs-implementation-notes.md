@@ -357,3 +357,166 @@ Append-only. One section per phase. Companion to
 ### Open questions
 - None. (`claude` was available in this environment, so both live-CLI tests ran
   rather than skipping.)
+
+## Phase 5: bundle (.mcpb)
+
+### Design decisions
+- Enumerating the host handler's advertised tools is done via a REAL,
+  in-process MCP handshake, not a shortcut: `advertised_tools<H>`
+  (`src/bundle.rs`) serves `handler` over one end of a `tokio::io::duplex`
+  pipe, connects a bare rmcp client (`()` -- `ClientHandler for ()` is
+  blanket-implemented) to the other end, and calls
+  `Peer::<RoleClient>::list_all_tools()`. This is generic over ANY
+  `H: ServerHandler`, including slack's eventual real handler -- nothing
+  test-shaped leaks into the production seam. Confirmed by reading rmcp
+  2.1.0/2.2.0 source directly
+  (`~/.cargo/registry/.../rmcp-2.2.0/src/service.rs`,
+  `src/service/client.rs`): `ServerHandler::list_tools` needs a
+  `RequestContext<RoleServer>`, buildable only from a `Peer<RoleServer>`, and
+  `Peer::new` is `pub(crate)` (the design's own finding for why `call` was
+  cut) -- so a real client peer is the only generic-over-`H` way to reach the
+  tool list without a live external client.
+- Both `handler.serve(server_end)` and `().serve(client_end)` block on their
+  own read of the `initialize` handshake before returning (confirmed by
+  reading `serve_server_with_ct_inner`/`serve_client_with_ct_inner` in rmcp's
+  source: the server loops reading the initialize REQUEST, the client awaits
+  the initialize RESPONSE, both BEFORE spawning the steady-state loop and
+  returning `RunningService`). Awaiting them sequentially therefore deadlocks
+  (proved live -- see Tests-must-bite). Fixed with `tokio::join!` to poll both
+  concurrently on the same task.
+- `manifest.json` is generated from `McpIo` + the tool list per the real mcpb
+  v0.3 schema, fetched from `modelcontextprotocol/mcpb` via `gh api` (network
+  curl was denied by the sandbox; `gh` was already authenticated) and checked
+  in as a test fixture (`tests/fixtures/mcpb-manifest-v0.3.schema.json`,
+  `additionalProperties: false` throughout). Required top-level fields per the
+  schema: `name`, `version`, `description`, `author` (with `author.name`),
+  `server` (with `server.type`, `server.entry_point`, `server.mcp_config` ->
+  `mcp_config.command`). `manifest_version` is documented as required in
+  `MANIFEST.md` prose but is NOT in the schema's own `required` array; emitted
+  anyway since it's a real, schema-recognized field. `server.type` is always
+  `"binary"` (every mcp-io host is a compiled Rust CLI). `mcp_config.args` is
+  `["mcp", "serve"]`, matching Phase 3's registration entry exactly.
+- The `.mcpb` BUNDLES a copy of the current build's binary under
+  `server/<bin>` (rather than referencing `current_exe()`'s absolute path the
+  way `register` does). This is deliberate and is the one place bundle does
+  NOT mirror register: bundle's whole stated purpose (design's Rollout Plan --
+  "ships to the whole company, majority macOS... Desktop/Cowork is a PRIMARY
+  target") is installing on colleagues' machines that do NOT already have this
+  CLI, so an absolute path pointing at THIS machine's install location would
+  be useless to them. `entry_point` and `mcp_config.command` both point at
+  `server/<bin>`, matching the mcpb spec's own "Binary Example" verbatim
+  (`"command": "server/my-server"`, relative, no `${__dirname}` prefix).
+- The packaged binary is stored with `CompressionMethod::Stored` (no
+  compression), not the default deflate: compiled binaries barely compress,
+  and deflating a real binary (tested against the 77MB debug test binary)
+  dominated the whole test suite's wall-clock at ~180s before this change,
+  ~2s after. `manifest.json` keeps the (harmless, tiny) default compression.
+- `author.name` is a fixed constant (`"Tatari"`): `McpIo` carries no author
+  field and the design doesn't add one for this phase; every consumer of this
+  library is a Tatari-owned CLI, so a fixed org-level default is defensible
+  pending a real seam (see Open Questions).
+- `run_bundle` (`src/cmd.rs`) now threads `build` through exactly like
+  `run_serve`: builds the handler (token-free, per the design), spins its own
+  multi-thread tokio runtime, and `block_on`s `bundle::bundle`. Bundle is a
+  build-requiring verb per the design's `run()` doc comment (grouped with
+  `serve`, not `register`/`unregister`/`status`).
+- Schema validation is REAL, not hand-asserted: `jsonschema` (dev-dependency,
+  `--no-default-features --features resolve-file` to avoid pulling in a
+  network-resolving `$ref` stack the local schema doesn't need) validates the
+  generated `manifest.json` against the checked-in v0.3 schema fixture via
+  `jsonschema::validator_for(...).iter_errors(...)`.
+
+### Deviations
+- **Disclosed phase reorder** (per the brief): the design orders Phase 5 AFTER
+  Phase 4 (slack-cli integration) so bundle is "smoke-tested against slack's
+  REAL handler." Phase 4 lives in a separate repo (`slack-cli`) and is gated
+  on this crate's tag existing first, so it is a cross-repo follow-on that
+  cannot run in this session. Phase 5 is built here, ahead of Phase 4, and
+  unit-tested against a FAKE handler (`FakeHandler`, `src/bundle/tests.rs`)
+  advertising two known tools (`search_widgets`, `post_widget`) via real
+  `#[tool_router]`/`#[tool_handler]` macros -- not a bare `ServerHandler`
+  stub, so the tool-enumeration path is exercised for real. The "smoke-test
+  against slack's real handler" criterion rides with the Phase 4 follow-on.
+  `bundle<H>`/`advertised_tools<H>` are generic over ANY `ServerHandler`, so
+  no rework is expected when slack's handler lands.
+- Added the `client` feature to `rmcp` (main dependency, not just dev): the
+  design's Dependencies section only names `features (server, macros)`.
+  Needed because `advertised_tools` requires `ClientHandler`/`RoleClient`/
+  `ClientInitializeError`, which rmcp gates behind `client` (`default = [base64,
+  macros, server]` does NOT include it). This is production code (the bundle
+  verb ships in the library), not test-only, so it rides the main dependency.
+- Added `zip` (main dependency) and `jsonschema` (dev-dependency), neither
+  named in the design's Dependencies list, because packaging + validating a
+  `.mcpb` needs them. Both added via `cargo add` with reduced feature sets
+  (`zip --no-default-features --features deflate`; `jsonschema
+  --no-default-features --features resolve-file`) to avoid pulling in unused
+  compression backends / network `$ref` resolution.
+
+### Tradeoffs
+- Bundling the real binary (`io::copy` from `current_exe()` into the zip) vs
+  referencing an absolute path like `register`: chose bundling because a
+  `.mcpb`'s entire value proposition is installing on a machine that does NOT
+  already have the CLI -- an absolute path would only work on the machine that
+  built the bundle. Cost: the packaged binary can go stale relative to a
+  `renew`-updated system install; accepted, since `.mcpb` is a point-in-time
+  distribution artifact (a new release re-runs `bundle`), not a live-updating
+  install like `register`'s Claude Code entries.
+- `Stored` vs deflate compression for the packaged binary: chose `Stored` for
+  speed (see Design decisions); the size cost (an uncompressed binary vs a
+  mildly-compressed one) is negligible for how compiled executables actually
+  compress, and irrelevant next to the wall-clock win.
+- Structural JSON-schema validation (real `jsonschema` crate against the
+  checked-in v0.3 fixture) vs a hand-asserted required-field list: chose the
+  real validator since it was cheap to add (`resolve-file`-only feature set)
+  and catches anything the schema forbids (`additionalProperties: false`
+  everywhere), not just what a hand-written assertion happens to check.
+
+### Tests-must-bite (performed)
+- First implementation awaited `handler.serve(server_end)` and then
+  `().serve(client_end)` sequentially; `cargo test bundle` hung indefinitely
+  (confirmed via a `timeout`-wrapped run, not just "felt slow"). Root cause
+  (see Design decisions): both `.serve()` calls block reading their own half
+  of the `initialize` handshake before returning, so the server call never
+  returns because the client hasn't started yet. Fixed with `tokio::join!`
+  to poll both concurrently; reran green.
+- Broke tool-name propagation in `build_manifest` (hardcoded the tools list to
+  an ignored-then-empty `Vec::new()`, keeping `tools` "used" to satisfy
+  `#![deny(unused_variables)]`) and reran
+  `test_bundle_produces_valid_manifest_with_matching_tool_names`: it FAILED
+  with `manifest.tools should be an array` (the `#[serde(skip_serializing_if =
+  "Vec::is_empty")]` on an empty list drops the field entirely, so
+  `manifest["tools"].as_array()` is `None`) -- exactly the propagation break
+  the test exists to catch. Reverted; `otto ci` green again (exit 0, "All CI
+  checks passed!").
+
+### Success criteria (from the doc, Phase 5, adapted per the disclosed reorder)
+- "`slack mcp bundle` produces a `.mcpb` that validates against the mcpb
+  manifest schema" -- adapted to "`<bin> mcp bundle` produces a `.mcpb` that
+  validates against the mcpb manifest schema" since slack isn't wired yet --
+  PASS: `test_bundle_produces_valid_manifest_with_matching_tool_names`
+  (`src/bundle/tests.rs`) builds a bundle from `FakeHandler`, extracts
+  `manifest.json` from the zip, and validates it against the checked-in real
+  mcpb v0.3 JSON schema with zero validation errors. Also covered end-to-end
+  through the CLI dispatch path by `test_run_bundle_dispatches_and_writes_file`
+  (`src/cmd/tests.rs`), which drives `McpCmd::run` for the `Bundle` variant.
+- "a smoke test asserts the manifest lists the same tool names
+  `SlackMcpServer` advertises" -- adapted to the fake handler --  PASS: the
+  same test asserts `manifest["tools"]`'s names equal
+  `["post_widget", "search_widgets"]`, matching `FakeHandler`'s
+  `#[tool_router]`-declared tools exactly;
+  `test_advertised_tools_lists_handler_tools` independently asserts
+  `advertised_tools(FakeHandler)` returns those same two names.
+- "Tests-must-bite (practice)" -- PASS, see above (both the deadlock discovery
+  and the deliberate tool-name break).
+
+### Open questions
+- Should `McpIo` (or the `mcp_io!()` macro) grow a real `author` field/seam so
+  `manifest.json`'s `author.name` reflects the actual host/team rather than
+  the fixed `"Tatari"` constant? Deferred here since the design doesn't
+  request it and no consumer has asked yet; flagging since Phase 6
+  (docs + contract fixture) or a future consumer may want it.
+- Confirm the packaged-binary choice (bundle the real executable under
+  `server/<bin>`, `Stored` compression) is what Scott wants for the
+  Desktop/Cowork distribution story, versus some other packaging shape (e.g.
+  a smaller wrapper script). Reasoned through in Tradeoffs above; no directly
+  stated preference in the design doc to confirm against.

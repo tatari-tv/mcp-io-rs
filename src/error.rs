@@ -53,6 +53,20 @@ pub enum Error {
 
     #[error("config at {path} has a non-object top-level value, refusing to overwrite")]
     ConfigNotObject { path: String },
+
+    // Phase 5 (bundle): enumerating the host handler's tools happens over a
+    // REAL, in-process MCP handshake (a bare rmcp client against the handler
+    // over an in-memory duplex), so it grows its own client-side variants
+    // alongside the existing server-side `Serve`. Boxed for the same
+    // large-enum-variant reason as `Serve`.
+    #[error("mcp client initialize error while enumerating tools for bundle: {0}")]
+    BundleClientInit(Box<rmcp::service::ClientInitializeError>),
+
+    #[error("list_tools error while enumerating tools for bundle: {0}")]
+    BundleListTools(Box<rmcp::service::ServiceError>),
+
+    #[error("zip error while packaging bundle: {0}")]
+    Zip(#[from] zip::result::ZipError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

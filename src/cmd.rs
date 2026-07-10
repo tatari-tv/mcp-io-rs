@@ -127,8 +127,39 @@ where
     E: Display,
 {
     debug!("run_bundle: bin={} out={out:?}", io.bin);
-    let _ = build;
-    crate::bundle::bundle(io, out)
+
+    // Bundle is a build-requiring verb (like serve): the manifest's tool list
+    // comes from the REAL built handler, not a guess.
+    let handler = match build() {
+        Ok(handler) => handler,
+        Err(e) => {
+            log::error!("run_bundle: handler construction failed: {e}");
+            eprintln!("{}: failed to build MCP server: {e}", io.bin);
+            return EXIT_FAILURE;
+        }
+    };
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            log::error!("run_bundle: failed to build tokio runtime: {e}");
+            eprintln!("{}: failed to start async runtime: {e}", io.bin);
+            return EXIT_FAILURE;
+        }
+    };
+
+    match runtime.block_on(crate::bundle::bundle(io, out, handler)) {
+        Ok(path) => {
+            eprintln!("{}: wrote bundle to {}", io.bin, path.display());
+            debug!("run_bundle: wrote bundle to {}", path.display());
+            EXIT_SUCCESS
+        }
+        Err(e) => {
+            log::error!("run_bundle: bundle failed: {e}");
+            eprintln!("{}: mcp bundle failed: {e}", io.bin);
+            EXIT_FAILURE
+        }
+    }
 }
 
 #[cfg(test)]
