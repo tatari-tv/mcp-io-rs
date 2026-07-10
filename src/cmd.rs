@@ -62,7 +62,7 @@ impl McpCmd {
             McpSub::Serve => run_serve(io, build),
             McpSub::Register { target } => crate::register::register(io, *target),
             McpSub::Unregister { target } => crate::register::unregister(io, *target),
-            McpSub::Status => crate::register::status(io),
+            McpSub::Status => crate::register::status(io, build),
             McpSub::Bundle { out } => run_bundle(io, out.clone(), build),
         }
     }

@@ -24,6 +24,35 @@ pub enum Error {
 
     #[error("mcp serve task join error: {0}")]
     Join(#[from] tokio::task::JoinError),
+
+    // Phase 3 (register/unregister/status).
+    #[error("cannot resolve current executable path: {0}")]
+    CurrentExe(std::io::Error),
+
+    #[error("cannot resolve {what} config path: neither $HOME nor $CLAUDE_CONFIG_DIR is set")]
+    ConfigPath { what: String },
+
+    // The `claude` CLI is not on PATH. Carries the exact command the user should
+    // run by hand (fail loud, never silent), per the design's Phase 3 bullet.
+    #[error("`claude` CLI not found on PATH. Run this by hand instead:\n  {command}")]
+    ClaudeMissing { command: String },
+
+    #[error("`{command}` failed (exit {code}):\n{stderr}")]
+    ClaudeFailed {
+        command: String,
+        code: String,
+        stderr: String,
+    },
+
+    // Desktop direct-write edges: the file exists but we refuse to touch it.
+    #[error("config at {path} is not valid JSON, refusing to overwrite: {source}")]
+    MalformedConfig { path: String, source: serde_json::Error },
+
+    #[error("`mcpServers` in {path} is present but is not a JSON object, refusing to overwrite")]
+    McpServersNotObject { path: String },
+
+    #[error("config at {path} has a non-object top-level value, refusing to overwrite")]
+    ConfigNotObject { path: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

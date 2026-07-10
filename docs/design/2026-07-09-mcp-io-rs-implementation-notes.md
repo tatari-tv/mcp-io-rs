@@ -234,3 +234,126 @@ Append-only. One section per phase. Companion to
 
 ### Open questions
 - None.
+
+## Phase 3: register / unregister / status
+
+### Design decisions
+- Two mechanisms, one per target class, exactly as the design mandates.
+  Claude Code `user`/`project` shell out to the real `claude` CLI
+  (`src/register/claude.rs`): writes via `claude mcp add-json <key> '<json>' -s
+  <scope>` and `claude mcp remove <key> -s <scope>`. This treats the target
+  config (`~/.claude.json` global state, `./.mcp.json`) as OPAQUE, so there is
+  zero risk of dropping the user's unrelated keys. VERIFIED against a live
+  invocation into an isolated `$CLAUDE_CONFIG_DIR`: the entry the CLI writes is
+  byte-for-byte `{"type":"stdio","command":"<abs>","args":["mcp","serve"]}`, and
+  `entry_json()` reproduces it exactly (a test asserts equality against the real
+  CLI's output).
+- `desktop` is a direct Value-preserving atomic write (`src/register/desktop.rs`,
+  `register_at`/`unregister_at`/`write_atomic`): parse as `serde_json::Value`,
+  splice ONLY `mcpServers.<key>` via the `Map::entry` API (so a present-but-
+  non-object `mcpServers` is left in place and rejected, never overwritten),
+  serialize pretty + trailing newline, write to `NamedTempFile::new_in(parent)`
+  (SAME dir -> no EXDEV), `sync_all()`, restore the original unix mode onto the
+  temp, then `persist` (atomic rename). A crash leaves the original intact.
+- Enabled serde_json's `preserve_order` feature (`Cargo.toml`) so the desktop
+  RMW does NOT reorder a user's existing keys (BTreeMap would sort them into a
+  spurious diff). Satisfies the rust determinism rule's "config round-trips
+  un-diffable" clause and keeps the byte-identical-no-op guarantee.
+- `current_exe()` lives in `src/register/mod.rs` (shared by both mechanisms):
+  the registered `command` is `std::env::current_exe()` resolved to an absolute
+  path, pointing at THIS build, never a `$PATH` guess.
+- File-state edges (`read_config`): missing/zero-byte -> fresh empty map (write
+  our key); malformed JSON -> `Error::MalformedConfig`, file left byte-for-byte
+  untouched; non-object top level -> `Error::ConfigNotObject` (untouched);
+  `mcpServers` present but not an object -> `Error::McpServersNotObject`
+  (untouched). Idempotent register replaces the value (derived from
+  `current_exe()`), so a second register is a byte-identical no-op. `unregister`
+  on a missing key / file is a clean no-op that never rewrites or creates a file.
+- `status` (`register/mod.rs`) surveys all three targets READ-ONLY (writes for
+  user/project still go through the `claude` CLI; reads parse the JSON directly
+  since a read can never clobber) and reports presence to STDERR. It then builds
+  the host handler (token-free) and warns when `get_info().server_info.name !=
+  bin` — the rmcp-reports-itself-as-"rmcp" gotcha (verified: rmcp's
+  `Implementation::from_build_env()` yields "rmcp"). A build failure only skips
+  the name check; status still exits 0.
+- All human-facing register/unregister/status output goes to STDERR via
+  `eprintln!`, because the crate is `#![deny(clippy::print_stdout)]` (stdout is
+  the JSON-RPC protocol channel during `serve`). The `claude` CLI's own "Added
+  stdio MCP server ..." output is surfaced through the same stderr path.
+
+### Deviations
+- `status` takes the host `build` closure (`register::status<H,F,E>`, wired from
+  `cmd.rs`), whereas the design's `run()` doc comment says "register/unregister/
+  status never build the handler." The design's own Risk table AND Phase 3
+  bullet require a status warning on whether `get_info` name matches bin, which
+  is IMPOSSIBLE without an instance. Resolution: status builds the handler
+  (construction is token-free — the no-token property is preserved for slack,
+  whose `SlackMcpServer::new` is token-free), inspects `get_info`, and degrades
+  gracefully (warn, skip the name check) if the build fails. Same intent,
+  correct seam — the only way to actually implement the stated mitigation.
+- Desktop path resolution is platform-specific (`config_path`): macOS
+  `~/Library/Application Support/Claude/...` via `dirs::home_dir()`, Linux
+  `xdg_config_dir()/Claude/...`. Intentionally NOT the crate's XDG helper on
+  macOS — Claude Desktop is a THIRD-PARTY app and we must match where IT reads,
+  per the rust rules' third-party carve-out. Tests exercise read/write/preserve
+  against explicit `TempDir` paths (never a platform-path assertion).
+- Enabled serde_json `preserve_order` (crate-wide feature) — not named in any
+  prior phase's dep list. Rationale above; harmless to serve.
+- Added `tempfile` as a real dependency (dev-only in Phases 1-2) and dropped the
+  now-redundant `tempfile`/`serde_json` dev-dependency entries.
+- Inverted two prior stub tests per tests-must-bite: the Phase-1 `should_panic`
+  dispatch stubs in `register/tests.rs` were replaced with real round-trip/status
+  tests, and `cmd/tests.rs`'s `should_panic(expected="Phase 3")` status stub
+  became `test_run_status_returns_success` asserting exit 0.
+
+### Tradeoffs
+- Live `claude` round-trip tests are GATED on `claude` being on PATH (skip-with-
+  note when absent), PLUS always-run pure unit tests for entry-JSON and argv
+  construction. On this machine `claude` IS available, so both the round-trip and
+  the real-entry-match tests executed and passed; on a claude-less CI host they
+  skip while the construction + shape logic stays covered. Chose real-CLI
+  coverage where available over a mock that could drift from the CLI's behavior.
+- status reads the REAL desktop/project config locations for the presence survey
+  in unit tests (read-only; our unique test key is never present). The user-scope
+  path is isolated via `$CLAUDE_CONFIG_DIR`; the survey outcome never affects the
+  asserted exit code (always 0), so this is safe.
+- Human output to STDERR (not stdout) for a status command: chosen for crate-wide
+  protocol-channel safety (`deny(print_stdout)`) and consistency with
+  `run_serve`'s stderr path. A caller piping status would not get it on stdout;
+  accepted and documented.
+
+### Tests-must-bite (performed)
+- Broke `register_at` to build a fresh empty `Map` instead of splicing into the
+  read config (clobber instead of preserve) and ran
+  `test_register_preserves_all_keys_and_servers`: it FAILED with
+  `left: Null, right: String("/bin/a")` — the pre-existing `other-a` server's
+  command vanished, exactly the clobber the test exists to catch. Reverted;
+  `otto ci` green again (exit 0).
+
+### Success criteria (from the doc, Phase 3)
+- "register -> status -> unregister round-trip (per target)" — PASS:
+  `test_claude_user_roundtrip` drives the real `claude` CLI (user scope) in a
+  temp `$CLAUDE_CONFIG_DIR` through register -> present -> unregister -> absent;
+  `test_register_fresh_creates_file` + `test_key_present_detection` cover the
+  desktop round-trip. Project scope shares the claude mechanism; its command
+  construction is unit-tested.
+- "desktop direct-write: a config pre-populated with two OTHER servers AND
+  unrelated top-level keys asserts ALL survive register AND unregister" — PASS:
+  `test_register_preserves_all_keys_and_servers` +
+  `test_unregister_preserves_all_keys_and_other_servers` (AC #3).
+- "a second register is a no-op (byte-identical file)" — PASS:
+  `test_second_register_is_byte_identical`.
+- "register against a malformed config, or a non-object `mcpServers`, errors and
+  leaves the file byte-for-byte untouched" — PASS:
+  `test_malformed_json_errors_and_leaves_file_untouched`,
+  `test_non_object_mcpservers_errors_and_leaves_file_untouched`,
+  `test_non_object_toplevel_errors_and_leaves_file_untouched`.
+- "the `claude mcp add-json` path is verified against a real invocation so
+  `<bin> mcp register` and a hand `claude mcp add-json` produce the same entry"
+  — PASS: `test_claude_add_json_matches_our_entry` asserts the entry the real CLI
+  wrote equals `entry_json()`. Observed real entry:
+  `{"type":"stdio","command":"/abs/path/slack","args":["mcp","serve"]}`.
+
+### Open questions
+- None. (`claude` was available in this environment, so both live-CLI tests ran
+  rather than skipping.)

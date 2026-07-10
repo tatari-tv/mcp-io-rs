@@ -25,11 +25,15 @@ fn make_io() -> McpIo {
 // (driving a fake handler over a transport is the right seam, not `McpCmd::run`,
 // which would seize the process's real stdin/stdout).
 
+// Inverted from the Phase-1 `should_panic(expected = "Phase 3")` stub: the status
+// arm is real as of Phase 3. It surveys every target read-only and returns
+// EXIT_SUCCESS regardless of registration state (the presence report + the
+// handshake-name warning go to stderr; the round-trip / preservation behavior is
+// covered by `src/register/tests.rs` and `src/register/desktop/tests.rs`).
 #[test]
-#[should_panic(expected = "Phase 3")]
-fn test_run_status_dispatches_to_phase3_stub() {
+fn test_run_status_returns_success() {
     let cmd = McpCmd { cmd: McpSub::Status };
-    cmd.run(&make_io(), build_dummy);
+    assert_eq!(cmd.run(&make_io(), build_dummy), 0);
 }
 
 #[test]
