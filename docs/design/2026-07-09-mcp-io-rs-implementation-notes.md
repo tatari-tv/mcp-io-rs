@@ -632,3 +632,94 @@ Append-only. One section per phase. Companion to
   only the mcp-io-rs side. The design doc's `Status:` field is left as-is
   (not flipped to Implemented) since the doc's own Phase 6 spans both repos
   and the slack-cli half is still outstanding.
+
+## Phase 4: slack-cli integration (first consumer)
+
+Lives in the `tatari-tv/slack-cli` repo (branch `add-mcp`), consuming
+`mcp-io` by git dep + tag `v0.1.0`. All new MCP code is in a single new
+module `src/mcp.rs` (+ `src/mcp/tests.rs`); the touches to `src/cli.rs`,
+`src/lib.rs`, and `src/main.rs` are append-only, to stay conflict-free with
+the parallel `slack-cli-capability-expansion` branch.
+
+### Design decisions
+- `McpIo::new("slack", env!("CARGO_PKG_VERSION"), None)` called directly
+  instead of `mcp_io!(key = "slack")` -- `src/main.rs` (Mcp intercept) -- the
+  macro can only override `server_key`, not `bin`, and it captures
+  `CARGO_PKG_NAME` = `slack-cli` while the shipped binary is `slack`. `bin`
+  drives the MCP log path (`~/.local/share/slack/logs/`) and the `status`
+  get_info-name check, so it MUST be `slack`. Mirrors the existing
+  `renew!(bin = "slack")` in the same file.
+- MCP intercept placed BEFORE `main`'s `setup_logging` and the passive renew
+  notice -- `src/main.rs` -- once `mcp serve` runs, stdout IS the JSON-RPC
+  channel, so nothing (our file-logger init, a renew stdout notice) may touch
+  it first; `mcp-io` owns stdout and routes its own logging. `Config` is
+  loaded inside the intercept block, self-contained, exactly like the `Update`
+  arm.
+- `chat_post_message` validates + applies the agent-attribution signature
+  (byte-identical to `slack write`'s `sign`: `format!("{body}{signature}")`),
+  and converts Markdown -> mrkdwn unless `raw=true` -- `src/mcp.rs` -- an MCP
+  post IS an agent post, and `write-signature` is a non-suppressible security
+  control (`config::validate_write_signature`). A raw wrap of the bare
+  `SlackApi::chat_post_message` would let an agent post unsigned. The
+  signature-validation failure is a protocol error (operator misconfig the LLM
+  cannot fix by re-calling), not a recoverable tool error.
+- Any typed `SlackErr` in the error chain relays as a RECOVERABLE
+  `CallToolResult::error`; a non-`SlackErr` fault maps to a protocol
+  `McpError::internal_error` -- `src/mcp.rs` `map_query_err` -- the design
+  called out the 401 case specifically; treating the whole typed family
+  (missing-scope, not-in-channel, not-found, rate-limited, other) as
+  recoverable is the correct MCP behavior (the LLM sees and adapts) and uses a
+  typed downcast on the chain, never a `Display`-string sniff (rust.md).
+- `mcp` added to the `plugin-guard` CLI<->skill EXCEPTIONS -- `.otto.yml` --
+  `mcp` is fleet-standard `mcp-io` scaffolding (CLI-only plumbing to serve /
+  self-register the server); the agent consumes the tools over the protocol,
+  not the verb, so it is not a skill. Identical rationale to `update` (renew).
+- `download_file` returns `{downloaded, bytes_len, base64}` -- `src/mcp.rs` --
+  the wrapped method returns `Option<Vec<u8>>`; base64 is the honest JSON-wire
+  representation, and the fail-open contract is preserved (`downloaded=false`
+  rather than an error on a dead/forbidden file).
+
+### Deviations
+- Per-call concurrency lock: the design said "under a short lock released
+  BEFORE the blocking call." slack-cli's token vend is LAZY (it happens inside
+  `SlackClient::call_method` on the first `.token()`), so it cannot be isolated
+  the way persona isolates `get_token_noninteractive`. Instead the `token_lock`
+  (std `Mutex`) is held around the WHOLE per-call blocking closure (build
+  source + client + request) inside `spawn_blocking`, dropped explicitly at the
+  end, never across an `.await`. Same effect (serialize vends, no
+  expired-token stampede), correct seam for slack's architecture. It is
+  belt-and-suspenders: `valet-client`'s cache write is already atomic + 0600.
+- Used `McpIo::new` directly rather than the `mcp_io!` macro (see design
+  decision above) -- same effect, correct seam; the macro lacks the `bin`
+  override that `renew!` has.
+- The lock guard is bound as a NAMED `guard` + explicit `drop(guard)`, not the
+  idiomatic `let _guard = ...` -- slack-cli's `otto lint` task bans the
+  `_name` binding form outright (even for RAII drop guards, which rust.md
+  normally permits). Named-and-dropped is equivalent and lint-clean.
+- `chat_post_message` is not a pure read-only wrapper (the team-lead framing
+  said "wrap read-only"): posting is inherently a write, and the mandatory
+  signature makes signing non-optional. See the design decision above.
+
+### Tradeoffs
+- Whole-closure lock vs. token-only lock: chose whole-closure because slack's
+  lazy token can't be isolated; the cost (no Slack-call parallelism) is
+  irrelevant for a local single-user stdio MCP.
+- `conversations_*` / `users_conversations` tools return ONE page +
+  `next_cursor` (the LLM paginates by re-calling with the cursor) vs. the CLI's
+  transparent multi-page walk: single-page lets the LLM control volume/cost and
+  matches the MCP idiom.
+- `chat_post_message` returns `{channel, ts}` only, not an emitted permalink:
+  skipped the extra `auth_test`/`workspace` round-trip; the LLM has a separate
+  `workspace` tool to build a permalink if it needs one.
+
+### Open questions
+- A live "Claude Code calls a slack tool end-to-end" round-trip (design AC)
+  was NOT exercised headless -- there is no interactive MCP client in this
+  session. Covered instead by: (a) a headless `initialize` +
+  `notifications/initialized` + `tools/list` handshake that lists all 11 tools
+  with `serverInfo.name = "slack"` (proving the `.with_server_info` gotcha is
+  handled), and (b) `slack mcp register --target user` writing the correct
+  `{"type":"stdio","command":<current_exe abs path>,"args":["mcp","serve"]}`
+  entry into an isolated `CLAUDE_CONFIG_DIR`, then `slack mcp status`
+  confirming it. The live tool-call AC should be confirmed once during the PR
+  shakedown.

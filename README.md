@@ -81,7 +81,9 @@ In `main.rs`, intercept the `Mcp` arm early, exactly like `renew`'s `Update` arm
 
 ```rust
 if let Command::Mcp(cmd) = &cli.command {
-    let io = mcp_io::mcp_io!(key = "slack");
+    // slack-cli's crate is `slack-cli` but its binary is `slack`; override `bin`
+    // (server_key then defaults to it). Use `mcp_io!()` when crate == binary.
+    let io = mcp_io::mcp_io!(bin = "slack");
     // `build` is called for serve, bundle, AND status (status builds the handler to
     // read its advertised server name for the mismatch warning). It is token-free
     // here -- the handler owns a cloned Config -- so no verb needs a login. Annotate
@@ -98,8 +100,10 @@ the host's crate), so `bin`/`version` are always the host's, never this
 crate's.
 
 ```rust
-let io = mcp_io::mcp_io!();              // server_key = bin = CARGO_PKG_NAME
-let io = mcp_io::mcp_io!(key = "slack");  // override the registration key / bin name
+let io = mcp_io::mcp_io!();                     // server_key = bin = CARGO_PKG_NAME
+let io = mcp_io::mcp_io!(key = "slack");         // override the registration key only
+let io = mcp_io::mcp_io!(bin = "slack");         // override the binary; server_key defaults to bin
+let io = mcp_io::mcp_io!(key = "s", bin = "slack"); // override both (either order)
 ```
 
 That is the full integration. No tokio runtime is built unless the `Mcp` arm

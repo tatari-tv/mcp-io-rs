@@ -26,6 +26,17 @@
 //!
 //! let io = mcp_io::mcp_io!(key = "example");
 //! assert_eq!(io.server_key, "example");
+//!
+//! // A host whose crate name differs from its binary (e.g. crate `slack-cli`,
+//! // binary `slack`) overrides `bin`; `server_key` defaults to `bin`:
+//! let io = mcp_io::mcp_io!(bin = "slack");
+//! assert_eq!(io.bin, "slack");
+//! assert_eq!(io.server_key, "slack");
+//!
+//! // Both are overridable together, in either order:
+//! let io = mcp_io::mcp_io!(key = "slack", bin = "slack");
+//! assert_eq!(io.bin, "slack");
+//! assert_eq!(io.server_key, "slack");
 //! ```
 
 mod bundle;
@@ -43,11 +54,15 @@ pub use serve::{init_logging, serve};
 /// Construct an [`McpIo`] from the HOST's crate metadata, mirroring `renew!()`.
 ///
 /// The no-arg form uses `CARGO_PKG_NAME` as both the binary name and the
-/// registration `server_key`:
+/// registration `server_key`. `bin` is overridable for hosts whose crate name
+/// differs from their installed binary (e.g. crate `slack-cli`, binary `slack`),
+/// exactly like `renew!(bin = "...")`; `key` overrides only the registration key:
 ///
 /// ```ignore
-/// let io = mcp_io::mcp_io!();               // server_key = bin = CARGO_PKG_NAME
-/// let io = mcp_io::mcp_io!(key = "slack");   // override the server key
+/// let io = mcp_io::mcp_io!();                        // server_key = bin = CARGO_PKG_NAME
+/// let io = mcp_io::mcp_io!(key = "slack");            // override the server key only
+/// let io = mcp_io::mcp_io!(bin = "slack");            // override bin; server_key defaults to bin
+/// let io = mcp_io::mcp_io!(key = "slack", bin = "slack"); // override both (either order)
 /// ```
 #[macro_export]
 macro_rules! mcp_io {
@@ -60,5 +75,14 @@ macro_rules! mcp_io {
             env!("CARGO_PKG_VERSION"),
             Some($key.to_string()),
         )
+    };
+    (bin = $bin:expr) => {
+        $crate::McpIo::new($bin, env!("CARGO_PKG_VERSION"), None)
+    };
+    (key = $key:expr, bin = $bin:expr) => {
+        $crate::McpIo::new($bin, env!("CARGO_PKG_VERSION"), Some($key.to_string()))
+    };
+    (bin = $bin:expr, key = $key:expr) => {
+        $crate::McpIo::new($bin, env!("CARGO_PKG_VERSION"), Some($key.to_string()))
     };
 }
