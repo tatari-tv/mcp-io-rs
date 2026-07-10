@@ -129,3 +129,108 @@ Append-only. One section per phase. Companion to
 
 ### Open questions
 - None.
+
+## Phase 2: serve
+
+### Design decisions
+- Reproduced Phase 0's proven seam as production code in `src/serve.rs`:
+  `handler.serve((stdin, stdout)).await` -> `service.waiting().await` ->
+  log the `QuitReason`. `serve<H>` keeps the exact public signature the design
+  specifies (`pub async fn serve<H: ServerHandler + Send + 'static>(handler: H)
+  -> Result<()>`); it delegates to a private transport-generic
+  `serve_with<H, T, E, A>` (see Deviations) so tests can inject a transport.
+- `init_logging(bin) -> Result<PathBuf>` (`src/serve.rs`) is the logging-
+  discipline helper: it routes the `log` facade to
+  `<xdg-data>/<bin>/logs/<bin>.log` via `env_logger` with
+  `Target::Pipe(<file>)`, mirroring persona-cli's `setup_logging`
+  (`persona-cli/src/main.rs:26-53`), which is the fleet's proven pattern for a
+  stdio MCP. Uses the crate's own `config::xdg_data_dir()` (honors
+  `$XDG_DATA_HOME`, `$HOME/.local/share` fallback), NOT `dirs::data_local_dir()`.
+- Default file-log level is DEBUG (a `DEFAULT_LOG_LEVEL` const), not INFO: the
+  `mcp` subcommand has no `--log-level` flag, and the function-level DEBUG story
+  the logging rule wants is only captured if DEBUG is emitted. A local stdio MCP
+  is low-volume enough that full DEBUG-to-file is the right default. `RUST_LOG`
+  is deliberately never consulted (house rule); the level is fixed in code.
+- `init_logging` uses `env_logger::Builder::try_init` (not `init`) so a repeated
+  call across tests in one process is a harmless no-op instead of a panic;
+  it still returns the resolved path. Re-exported at the crate root
+  (`pub use serve::{init_logging, serve};`) so the isolated integration test
+  (and future hosts) can reach it.
+- `run_serve` (`src/cmd.rs`) now: routes logging to a file FIRST (before any
+  stdout touch, since stdout becomes the protocol channel), builds the handler
+  via the host `build` closure, spins a multi-thread tokio runtime, and
+  `block_on(crate::serve::serve(handler))`. All failure paths log via `log`
+  and report to STDERR (never stdout) and return `EXIT_FAILURE` (a named const);
+  clean shutdown returns `EXIT_SUCCESS`.
+- Error enum (`src/error.rs`) grew a `LogPath(String)` variant (log-dir
+  resolution when neither `$HOME` nor `$XDG_DATA_HOME` is set), a `Serve(Box<
+  rmcp::service::ServerInitializeError>)` variant, and a `Join(#[from]
+  tokio::task::JoinError)` variant. The `Serve` variant is BOXED and carries no
+  `#[from]` (see Tradeoffs).
+
+### Deviations
+- Added a PRIVATE `serve_with<H, T: IntoTransport<RoleServer, E, A>, E, A>`
+  seam that the public `serve` delegates to over `(stdin, stdout)`. The design
+  named only `serve<H>`; the brief pre-authorized this exact refactor ("refactor
+  serve to take a generic transport ... keep the public seam exactly as the
+  design specifies"). Same effect, correct seam: it exists so the clean-shutdown
+  test can drive a fake handler over an in-memory duplex transport and assert the
+  `QuitReason` directly. Public `serve<H>` is byte-for-byte the design signature.
+- Re-exported `init_logging` at the crate root, which the design's lib.rs bullet
+  (`McpCmd, serve, McpIo, Error, Result, mcp_io!`) does not list. Needed so the
+  isolated integration test (Acceptance Criterion #4) can call it; it is also a
+  legitimate part of the crate's public logging-discipline API. Same
+  disclosed-deviation shape as Phase 1's `xdg_config_dir`/`xdg_data_dir`
+  re-exports.
+- Removed the Phase-1 `should_panic(expected = "Phase 2")`
+  `test_run_serve_dispatches_to_phase2_stub` from `src/cmd/tests.rs`: the serve
+  arm is no longer a `todo!()` stub, so the test that pinned that behavior was
+  inverted (deleted with a comment pointing at the real serve tests), per the
+  tests-must-bite / invert-the-old-test rule.
+
+### Tradeoffs
+- `Serve(Box<ServerInitializeError>)` WITHOUT `#[from]`, mapped explicitly at
+  the call site (`.map_err(|e| Error::Serve(Box::new(e)))`), vs `#[from]` on the
+  bare error: rmcp's `ServerInitializeError` is ~528 bytes, which trips clippy
+  `large_enum_variant` + `result_large_err` under `-D warnings`. Boxing shrinks
+  the enum; but `#[from] Box<E>` would derive `From<Box<E>>`, not `From<E>`, so
+  `?` on `serve()` would not compile. The explicit `map_err` is the clean
+  reconciliation. `Join(#[from] JoinError)` stays `#[from]` (it is small).
+- The stdout-discipline test lives in its OWN integration binary
+  (`tests/stdout.rs`), NOT as a unit test, and uses `libc::dup/dup2` to redirect
+  the process's real fd 0/1. A first attempt as a unit test FAILED because the
+  libtest harness writes sibling tests' "... ok" progress lines to the real
+  fd 1, which the redirect captured and which then failed the JSON-RPC frame
+  check. Isolating it as the sole test in its own binary means nothing else
+  prints to fd 1 during the capture window. This is why `rmcp`, `serde_json`,
+  and `libc` were added as dev-dependencies (the integration crate can only see
+  the public API + dev-deps, and it needs to define a handler + parse frames +
+  redirect fds). Capturing the TRUE fd 1 (not an injected buffer) is what makes
+  the test faithful and makes the break-a-test bite.
+- `init_logging` defaults to DEBUG rather than INFO (persona's default): traded
+  a quieter log for a complete function-level story, since there is no
+  `--log-level` flag to raise verbosity on demand.
+
+### Tests-must-bite (performed)
+- Broke `init_logging` to `env_logger::Target::Stdout` and re-ran
+  `cargo test --test stdout`: the test FAILED with
+  `non-JSON line on stdout (log leak?): "[... DEBUG mcp_io::serve] serve:
+  handler=stdout::DummyHandler"` -- the misrouted DEBUG line landed on the
+  captured stdout and failed the frame check. Reverted to `Target::Pipe(<file>)`;
+  `otto ci` green again (exit 0).
+
+### Success criteria (from the doc, Phase 2)
+- "a test drives the fake handler through `serve` and asserts a clean shutdown on
+  client disconnect (`waiting()` returns, quit reason logged)" -- PASS:
+  `test_serve_with_clean_shutdown_on_client_disconnect` (`src/serve/tests.rs`)
+  feeds `initialize` + `notifications/initialized` then EOF and asserts
+  `serve_with` returns `QuitReason::Closed` (waiting() returned) and that the
+  server wrote at least one response frame. `serve` logs the quit reason at
+  DEBUG on exit.
+- "a test captures the crate's stdout during `serve` and asserts it contains ONLY
+  JSON-RPC frames (no log lines)" -- PASS: `tests/stdout.rs` captures real fd 1
+  and asserts every non-empty line is a JSON-RPC 2.0 frame, plus that the
+  lifecycle logging landed in the file target.
+
+### Open questions
+- None.

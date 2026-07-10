@@ -19,12 +19,11 @@ fn make_io() -> McpIo {
     McpIo::new("test", "0.0.0", None)
 }
 
-#[test]
-#[should_panic(expected = "Phase 2")]
-fn test_run_serve_dispatches_to_phase2_stub() {
-    let cmd = McpCmd { cmd: McpSub::Serve };
-    cmd.run(&make_io(), build_dummy);
-}
+// The `serve` arm is no longer a stub as of Phase 2: it routes logging to a
+// file, builds a tokio runtime, and runs `crate::serve::serve`. Its behavior is
+// covered by the serve lifecycle + stdout-discipline tests in `src/serve/tests.rs`
+// (driving a fake handler over a transport is the right seam, not `McpCmd::run`,
+// which would seize the process's real stdin/stdout).
 
 #[test]
 #[should_panic(expected = "Phase 3")]

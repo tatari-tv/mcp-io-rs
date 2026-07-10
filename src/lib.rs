@@ -38,7 +38,7 @@ mod serve;
 pub use cmd::McpCmd;
 pub use config::{McpIo, xdg_config_dir, xdg_data_dir};
 pub use error::{Error, Result};
-pub use serve::serve;
+pub use serve::{init_logging, serve};
 
 /// Construct an [`McpIo`] from the HOST's crate metadata, mirroring `renew!()`.
 ///
