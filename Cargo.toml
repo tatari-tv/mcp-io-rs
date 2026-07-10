@@ -1,0 +1,28 @@
+[package]
+name = "mcp-io"
+version = "0.1.0"
+edition = "2024"
+authors = ["Scott Idler <scott.idler@tatari.tv>"]
+description = "Shared library giving any Tatari CLI a local stdio MCP server via one `mcp` subcommand"
+license = "MIT"
+repository = "https://github.com/tatari-tv/mcp-io-rs"
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+dirs = "6.0.0"
+env_logger = "0.11.11"
+log = "0.4.33"
+rmcp = { version = "2.1.0", features = ["server", "macros", "client"] }
+schemars = "1.2.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.150", features = ["preserve_order"] }
+tempfile = "3.27.0"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "io-std", "macros"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+eyre = "0.6.12"
+jsonschema = { version = "0.47.0", default-features = false, features = ["resolve-file"] }
+libc = "0.2.186"
+rmcp = { version = "2.1.0", features = ["server", "macros"] }

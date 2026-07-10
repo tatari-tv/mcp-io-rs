@@ -1,0 +1,36 @@
+{
+  "description": "Checked contract for mcp-io's registration surface: the mcpServers entry shape written for every target, and the path-resolution rule per target. A future consumer (e.g. a mcp-io-py port) must reproduce this exactly -- see the okta-auth-rs/okta-auth-py drift lesson in the design doc. Pinned by src/register/tests.rs's `contract` test module: changing this file without updating the real writers (or vice versa) fails that test.",
+  "entry": {
+    "description": "The mcpServers entry value mcp-io writes for EVERY target, verified byte-for-byte against a real `claude mcp add-json` invocation (Phase 3 implementation notes).",
+    "example": {
+      "type": "stdio",
+      "command": "/abs/path/to/host-binary",
+      "args": [
+        "mcp",
+        "serve"
+      ]
+    }
+  },
+  "targets": {
+    "user": {
+      "mechanism": "claude-cli",
+      "scope-flag": "user",
+      "config-file": ".claude.json",
+      "resolution": "$CLAUDE_CONFIG_DIR/.claude.json if $CLAUDE_CONFIG_DIR is set and absolute, else $HOME/.claude.json"
+    },
+    "project": {
+      "mechanism": "claude-cli",
+      "scope-flag": "project",
+      "config-file": ".mcp.json",
+      "resolution": "./.mcp.json, resolved relative to the current working directory (project scope)"
+    },
+    "desktop": {
+      "mechanism": "direct-write",
+      "config-file": "claude_desktop_config.json",
+      "resolution": {
+        "macos": "$HOME/Library/Application Support/Claude/claude_desktop_config.json",
+        "linux": "$XDG_CONFIG_HOME/Claude/claude_desktop_config.json if $XDG_CONFIG_HOME is set and absolute, else $HOME/.config/Claude/claude_desktop_config.json (community build)"
+      }
+    }
+  }
+}
