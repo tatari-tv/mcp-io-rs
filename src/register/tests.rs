@@ -122,3 +122,84 @@ fn test_claude_user_roundtrip() {
     }
     drop(guard);
 }
+
+/// The checked contract artifact (`tests/fixtures/contract.json`, Phase 6): pins the
+/// entry shape and per-target path-resolution rule so a future consumer (a
+/// `mcp-io-py` port, or any other rewrite) cannot drift the way okta-auth did. Every
+/// assertion here calls the REAL writer/resolver, never a hand-copied literal, so
+/// changing the entry shape or a path rule without updating the fixture fails these
+/// tests.
+mod contract {
+    use super::*;
+
+    const CONTRACT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/contract.json"));
+
+    fn fixture() -> serde_json::Value {
+        serde_json::from_str(CONTRACT).unwrap()
+    }
+
+    #[test]
+    fn test_contract_entry_matches_claude_entry_json() {
+        let contract = fixture();
+        let example = &contract["entry"]["example"];
+        let command = example["command"].as_str().unwrap();
+        assert_eq!(
+            &crate::register::claude::entry_json(command),
+            example,
+            "claude::entry_json() diverged from the checked contract fixture"
+        );
+    }
+
+    #[test]
+    fn test_contract_project_path_matches_config_path() {
+        let contract = fixture();
+        let expected = contract["targets"]["project"]["config-file"].as_str().unwrap();
+        assert_eq!(
+            crate::register::claude::config_path(Target::Project).unwrap(),
+            std::path::PathBuf::from(expected)
+        );
+    }
+
+    #[test]
+    fn test_contract_user_path_honors_env_and_filename() {
+        let contract = fixture();
+        let filename = contract["targets"]["user"]["config-file"].as_str().unwrap();
+
+        let guard = ENV_LOCK.lock().unwrap();
+        let prior = std::env::var("CLAUDE_CONFIG_DIR").ok();
+        let dir = TempDir::new().unwrap();
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
+        assert_eq!(
+            crate::register::claude::config_path(Target::User).unwrap(),
+            dir.path().join(filename)
+        );
+        unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
+        assert!(
+            crate::register::claude::config_path(Target::User)
+                .unwrap()
+                .ends_with(filename)
+        );
+
+        match prior {
+            Some(v) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", v) },
+            None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+        }
+        drop(guard);
+    }
+
+    /// Desktop's path is asserted by SUFFIX only (`Claude/<config-file>`), never a
+    /// full platform-specific literal -- the env-honoring behavior itself is already
+    /// covered by `crate::config`'s own tests, and the suffix holds regardless of
+    /// whatever `$XDG_CONFIG_HOME` happens to be set to in this process.
+    #[test]
+    fn test_contract_desktop_path_matches_suffix() {
+        let contract = fixture();
+        let filename = contract["targets"]["desktop"]["config-file"].as_str().unwrap();
+        let path = crate::register::desktop::config_path().unwrap();
+        assert!(
+            path.ends_with(format!("Claude/{filename}")),
+            "desktop config_path() {} must end with Claude/{filename}",
+            path.display()
+        );
+    }
+}

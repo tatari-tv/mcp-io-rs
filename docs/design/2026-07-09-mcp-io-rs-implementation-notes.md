@@ -520,3 +520,115 @@ Append-only. One section per phase. Companion to
   Desktop/Cowork distribution story, versus some other packaging shape (e.g.
   a smaller wrapper script). Reasoned through in Tradeoffs above; no directly
   stated preference in the design doc to confirm against.
+
+## Phase 6 (mcp-io side): docs + contract golden fixture
+
+### Design decisions
+- README (`README.md`, previously a two-line stub) is written as a full
+  integration guide modeled on `renew`'s, covering: the value split (library
+  owns scaffolding, host owns its `ServerHandler`), the git-dep-by-tag
+  quickstart, the `Mcp(mcp_io::McpCmd)` embed + `#[tool_router]` handler +
+  `main.rs` early-intercept wiring (mirroring renew's `Update` arm), the
+  `mcp_io!()` macro, the `.with_server_info` requirement (called out as its
+  own section since it is the one gotcha every integrator hits -- rmcp's
+  `Implementation::from_build_env()` expands `CARGO_CRATE_NAME` *inside rmcp*,
+  reporting `"rmcp"` unless overridden), a verb table for all five verbs plus
+  the `--target` table, the checked contract artifact, the `.mcpb` shape
+  (bundles the real binary under `server/<bin>`, `server.type: "binary"`,
+  `author.name` fixed to `"Tatari"`), the logging discipline (file-routed,
+  DEBUG default, no `--log-level`/`$RUST_LOG`), the auth/concurrency
+  guidance for a non-`Clone` client, and the non-goals (remote transport,
+  resources/prompts, the cut `call` verb).
+- The git-dep snippet uses a placeholder tag (`tag = "vX.Y.Z"`) rather than a
+  concrete version number: no tag has been cut for this repo yet (`git tag -l`
+  is empty at the time of writing), and the house doc-writing rule bans
+  pre-naming a release before it exists. `renew`'s README uses a concrete tag
+  because `renew` has actually shipped one.
+- The checked contract artifact is `tests/fixtures/contract.json` (sibling of
+  the existing `tests/fixtures/mcpb-manifest-v0.3.schema.json`, so both golden
+  fixtures for this crate live in one place). It captures two things per the
+  design's Phase 6 bullet: the `mcpServers` entry shape (an `entry.example`
+  object, verified byte-for-byte against a real `claude mcp add-json`
+  invocation per Phase 3) and the per-target path-resolution rule (a
+  `targets.<user|project|desktop>` object per target: mechanism, scope flag,
+  config filename, and a prose `resolution` rule -- not a literal path, since
+  `user`/`desktop` are environment-dependent).
+- The contract TEST lives as a `contract` submodule inside
+  `src/register/tests.rs` (`mod contract { ... }`), not as a `tests/` (cargo
+  integration test) binary. Reason: the functions the design says to pin
+  (`claude::entry_json`, `claude::config_path`, `desktop::config_path`) are
+  all `pub(crate)`, invisible to an integration test crate, which can only see
+  the public API. Every assertion loads `tests/fixtures/contract.json` via
+  `include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/contract.json"))`
+  and calls the REAL functions against it (`crate::register::claude::entry_json`,
+  `crate::register::claude::config_path`, `crate::register::desktop::config_path`),
+  never a hand-copied shape -- exactly the "reuse Phase 3's real code paths"
+  requirement.
+- The desktop path assertion checks only the SUFFIX (`Claude/<config-file>`),
+  never a full platform literal, and never mutates `$XDG_CONFIG_HOME` --
+  `crate::config`'s own tests already cover the env-honoring/fallback behavior
+  (`xdg_config_dir()`), and `desktop::config_path()` calls that helper
+  directly, so re-testing the env behavior here would (a) be redundant and
+  (b) risk a cross-module env-var race against `config::tests`'s own
+  `ENV_LOCK` (a different mutex than `register::ENV_LOCK`, guarding the same
+  process-global `$XDG_CONFIG_HOME`). The user-path assertion DOES mutate env
+  (`$CLAUDE_CONFIG_DIR`), but that is safe: it is guarded by
+  `register::ENV_LOCK`, the same lock every other `CLAUDE_CONFIG_DIR`-mutating
+  test in this module already uses, and no other module touches that
+  variable.
+
+### Deviations
+- None. The README and contract fixture are new files with no prior shape to
+  diverge from; the contract test module lives inside `src/register/tests.rs`
+  rather than a new top-level `tests/contract.rs` file, disclosed above as a
+  visibility-driven seam choice, not a shortcut.
+
+### Tradeoffs
+- One golden JSON fixture covering both the entry shape AND the path-
+  resolution table, vs two separate fixture files: chose one file since both
+  facts are the same "registration contract" a `mcp-io-py` port must
+  reproduce together, and the design's Phase 6 bullet names them as one
+  artifact ("a checked-in golden fixture of the registration entry format +
+  the target path-resolution table").
+- Prose `resolution` strings in the fixture (e.g. "`$CLAUDE_CONFIG_DIR/.claude.json`
+  if set and absolute, else `$HOME/.claude.json`") vs a fully mechanized
+  fixture (e.g. an ordered list of env-var/fallback pairs the test walks
+  generically): chose prose + a targeted assertion per target, since the
+  three targets' resolution rules are structurally different (two shell out
+  to `claude`, one is a direct write; `desktop` additionally branches on
+  `target_os`) and a generic walker would either flatten that distinction or
+  need as much special-casing as three explicit tests. The prose still keeps
+  the fixture human-legible documentation, and every machine-checkable fact
+  in it (config filename, example entry) IS asserted against real code.
+
+### Tests-must-bite (performed)
+- Broke the real writer: added `"--verbose"` to `claude::entry_json`'s `args`
+  array. Reran `cargo test --all-features register::` -- both
+  `register::claude::tests::test_entry_json_shape` (the pre-existing pinned
+  test) and the new `register::tests::contract::test_contract_entry_matches_claude_entry_json`
+  FAILED, printing the exact `args` diff (`["mcp","serve","--verbose"]` vs
+  `["mcp","serve"]`). Reverted; reran green.
+- Broke the fixture instead of the code: changed `contract.json`'s
+  `targets.project.config-file` from `.mcp.json` to `.claude-project.json`
+  (code unchanged). `test_contract_project_path_matches_config_path` FAILED
+  with `left: ".mcp.json" right: ".claude-project.json"` -- proving the test
+  catches drift from EITHER side, not just a code regression. Reverted;
+  `otto ci` green again (exit 0, "All CI checks passed!").
+
+### Success criteria (from the doc, Phase 6, mcp-io side)
+- "`otto ci` green" -- PASS: `otto ci` exits 0 with "OK: All CI checks
+  passed!" (41 lib tests + 1 stdout integration test + 1 doctest, all green).
+- "the golden fixture test fails if the entry shape changes without updating
+  the fixture" -- PASS: see Tests-must-bite above, both directions (writer
+  changed / fixture changed) demonstrated to fail loudly.
+
+### Open questions
+- None new. The Phase 5 open question about a real `author` seam for
+  `McpIo`/`mcp_io!()` (vs the fixed `"Tatari"` constant) is unchanged and
+  still open; the README documents the current fixed behavior honestly
+  rather than speculating on a future seam.
+- Phase 4 (slack-cli integration) and the slack-cli README/bump are a
+  cross-repo follow-on that has not run in this session; this phase covers
+  only the mcp-io-rs side. The design doc's `Status:` field is left as-is
+  (not flipped to Implemented) since the doc's own Phase 6 spans both repos
+  and the slack-cli half is still outstanding.
