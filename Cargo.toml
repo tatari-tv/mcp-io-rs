@@ -1,6 +1,6 @@
 [package]
 name = "mcp-io"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["Scott Idler <scott.idler@tatari.tv>"]
 description = "Shared library giving any Tatari CLI a local stdio MCP server via one `mcp` subcommand"
