@@ -8,6 +8,7 @@ tasks:
   lint:
     help: "Run whitespace and convention linting"
     bash: |
+      set -euo pipefail
       whitespace -r
       echo ""
       echo "=== Deny _variable binding pattern ==="
@@ -22,6 +23,7 @@ tasks:
   check:
     help: "Run all quality checks (compile, clippy, format)"
     bash: |
+      set -euo pipefail
       echo "=== Checking compilation ==="
       cargo check --all-targets --all-features
       echo ""

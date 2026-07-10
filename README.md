@@ -82,9 +82,13 @@ In `main.rs`, intercept the `Mcp` arm early, exactly like `renew`'s `Update` arm
 ```rust
 if let Command::Mcp(cmd) = &cli.command {
     let io = mcp_io::mcp_io!(key = "slack");
-    // `build` is called ONLY for serve/bundle, and is token-free here: the handler
-    // owns a cloned Config, no login needed to register/bundle/status.
-    std::process::exit(cmd.run(&io, || Ok(SlackMcpServer { config: config.clone() })));
+    // `build` is called for serve, bundle, AND status (status builds the handler to
+    // read its advertised server name for the mismatch warning). It is token-free
+    // here -- the handler owns a cloned Config -- so no verb needs a login. Annotate
+    // the closure's error type so `cmd.run`'s generic `E: Display` is inferable.
+    std::process::exit(cmd.run(&io, || {
+        Ok::<_, std::convert::Infallible>(SlackMcpServer { config: config.clone() })
+    }));
 }
 ```
 
@@ -219,8 +223,11 @@ probe method and never builds the runtime speculatively.
 If your host's client isn't `Clone` and can't be shared across calls (e.g. it
 wraps a blocking HTTP client), rebuild it per tool call inside
 `tokio::task::spawn_blocking`, under a lock scope that is released before the
-blocking call -- never hold a lock across `.await`, and never call a blocking
-client directly inside an async tool handler (it will panic on the runtime).
+blocking call -- never hold a lock across `.await`. Never call a blocking client
+directly inside an async tool handler: `reqwest::blocking` specifically panics
+when driven from within an async runtime, and a generic blocking client that
+does not panic will instead stall the runtime's worker threads. Either way,
+route it through `spawn_blocking`.
 
 ## Non-goals
 

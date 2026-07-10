@@ -90,9 +90,11 @@ pub(crate) fn unregister(io: &McpIo, target: Target) -> Result<()> {
     Ok(())
 }
 
-/// Run `claude <args...>`, inheriting stdout/stderr so the user sees the CLI's own
-/// "Added stdio MCP server ..." output. A missing `claude` binary fails LOUD with
-/// the exact command to run by hand; a non-zero exit propagates as [`Error::ClaudeFailed`].
+/// Run `claude <args...>`. `Command::output()` captures the child's stdout AND
+/// stderr (they are NOT inherited); we re-emit both on OUR stderr so the user still
+/// sees the CLI's "Added stdio MCP server ..." output while our stdout stays clean.
+/// A missing `claude` binary fails LOUD with the exact command to run by hand; a
+/// non-zero exit propagates as [`Error::ClaudeFailed`].
 fn run_claude(args: &[String]) -> Result<()> {
     let printable = format!("{CLAUDE_BIN} {}", args.join(" "));
     debug!("run_claude: {printable}");
@@ -138,6 +140,10 @@ pub(crate) fn config_path(target: Target) -> Result<PathBuf> {
                 if path.is_absolute() {
                     return Ok(path.join(".claude.json"));
                 }
+                warn!(
+                    "config_path: CLAUDE_CONFIG_DIR={} is not absolute; ignoring it and falling back to $HOME/.claude.json",
+                    path.display()
+                );
             }
             dirs::home_dir()
                 .map(|h| h.join(".claude.json"))
