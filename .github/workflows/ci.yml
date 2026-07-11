@@ -1,0 +1,17 @@
+name: ci
+
+# mcp-io is a public library, so it CANNOT call the internal tatari-tv/github-actions
+# reusable workflows (GitHub blocks public -> internal). It calls the public twin,
+# tatari-tv/github-actions-public, instead. CI only: a library ships no binary, so
+# there is no rust-cli-release caller here.
+#
+# No private-deps: every dependency is on crates.io, so no token is needed.
+
+on:
+  push:
+    branches: ['**']
+  pull_request: {}
+
+jobs:
+  ci:
+    uses: tatari-tv/github-actions-public/.github/workflows/rust-ci.yml@v1
