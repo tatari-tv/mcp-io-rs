@@ -184,12 +184,16 @@ Per-phase wiring checklist (applies to all three, from the slack template):
 
 ## Acceptance Criteria
 
-- [ ] For each of persona/clyde/marquee: `<bin> mcp serve` handshakes over stdio and `tools/list` returns the expected tool set with `serverInfo.name == "<bin>"` (not "rmcp").
-- [ ] For each: `<bin> mcp register --target user` writes `{"type":"stdio","command":"<abs current_exe>","args":["mcp","serve"]}` and `<bin> mcp status` confirms presence with no name mismatch.
-- [ ] persona-cli and clyde delete ALL hand-rolled MCP scaffolding (serve lifecycle, manual registration, bespoke logging/tracing); no `claude mcp add` remains in either repo's docs.
-- [ ] clyde's `Cargo.lock` contains exactly one rmcp version (2.x) after the bump; marquee's workspace builds with both rmcp 1.8.0 (remote, unchanged) and 2.x (CLI) present.
-- [ ] marquee's local tools mirror the remote MCP's implemented tool names; the remote `marquee-mcp` crate is byte-unchanged.
-- [ ] For each: `<bin> mcp bundle` produces a `.mcpb` whose `manifest.json` lists the host's tool names (bundle is provided by mcp-io; smoke-tested once per repo).
+All six verified at implementation (2026-07-10); see the per-phase success criteria and the implementation-notes file for the evidence per repo.
+
+- [x] For each of persona/clyde/marquee: `<bin> mcp serve` handshakes over stdio and `tools/list` returns the expected tool set with `serverInfo.name == "<bin>"` (not "rmcp"). *(persona 16 tools, clyde 5, marquee 5; each `serverInfo.name` asserted.)*
+- [x] For each: `<bin> mcp register --target user` writes `{"type":"stdio","command":"<abs current_exe>","args":["mcp","serve"]}` and `<bin> mcp status` confirms presence with no name mismatch.
+- [x] persona-cli and clyde delete ALL hand-rolled MCP scaffolding (serve lifecycle, manual registration, bespoke logging/tracing); no `claude mcp add` remains in either repo's docs.
+- [x] clyde's `Cargo.lock` contains exactly one rmcp version (2.x) after the bump; marquee's workspace builds with both rmcp 1.8.0 (remote, unchanged) and 2.x (CLI) present. *(clyde `cargo tree -i rmcp` = one v2.2.0; marquee tree shows 1.8.0 for `marquee-mcp` and 2.2.0 for the CLI.)*
+- [x] marquee's local tools mirror the remote MCP's implemented tool names; the remote `marquee-mcp` crate is byte-unchanged. *(`git diff` empty for `mcp/`.)*
+- [x] For each: `<bin> mcp bundle` produces a `.mcpb` whose `manifest.json` lists the host's tool names (bundle is provided by mcp-io; smoke-tested once per repo).
+
+> One PARTIAL verification, disclosed: the Phase 3 `marquee_read` dev-server round-trip could not run against a live dev server. The unauthenticated recoverable-error path was verified end-to-end and the read payload shape was confirmed against the code (see the `marquee_read` contract correction and the implementation notes, Phase 3 Open questions). No overall acceptance criterion above depends on that round-trip.
 
 ## Resolved Decisions
 
@@ -197,9 +201,9 @@ Per-phase wiring checklist (applies to all three, from the slack template):
 - 2026-07-10 (Scott): marquee gets a NEW local stdio MCP on the CLI, mirroring the remote MCP's implemented tool names; the remote streamable-http MCP is untouched, and the two sit alongside cleanly (separate processes/transports/backends; two rmcp majors coexist in the workspace).
 - 2026-07-10 (Scott): persona drops the eager fail-fast token probe; the per-call recoverable `AuthFailed` already carries the "run persona login" hint, and dropping it keeps `register`/`status`/`bundle` token-free.
 - 2026-07-10 (Scott): clyde's serve config (`projects-dir`, `reindex-on-start`) moves to `~/.config/clyde/clyde.yml` with zero-config defaults, since a Claude-Code-spawned `mcp serve` gets fixed args and cannot receive flags.
-- 2026-07-10 (Scott, default pending pushback): the remote `marquee-mcp` crate stays on rmcp 1.8.0. Bumping it to 2.x is a separate concern with its own deploy story; not folded into this doc. Revisit condition: a workspace-wide rmcp consolidation is prioritized.
-- 2026-07-10 (default pending pushback): all three repos pin `mcp-io` v0.1.2 (the current tag; slack-cli is already on it). No lockstep bump needed.
-- 2026-07-10 (default pending pushback): recommended order is persona -> clyde -> marquee (cheap/deterministic first, expensive/risky last); the three are independent, so parallel is possible if desired.
+- 2026-07-10 (Scott; ACCEPTED at ship, no pushback): the remote `marquee-mcp` crate stays on rmcp 1.8.0. Bumping it to 2.x is a separate concern with its own deploy story; not folded into this doc. Revisit condition: a workspace-wide rmcp consolidation is prioritized. Outcome: `marquee-mcp` shipped byte-unchanged (`git diff` empty for `mcp/`).
+- 2026-07-10 (ACCEPTED at ship, no pushback): all three repos pin `mcp-io` v0.1.2. No lockstep bump needed. Outcome: all three shipped on v0.1.2; `mcp-io-rs` was later made public (see the Implementation Addendum) but the tag pin was unchanged.
+- 2026-07-10 (ACCEPTED at ship, no pushback): recommended order persona -> clyde -> marquee (cheap/deterministic first, expensive/risky last); the three are independent. Outcome: exercised the "parallel is possible" path - all three were implemented in parallel, then merged/tagged independently.
 - 2026-07-10 (panel, both reviewers): clyde ACCEPTS the loss of rmcp/tokio internal `tracing` capture (mcp-io routes only the `log` facade to a file). Those events never hit stdout, so protocol safety holds; only diagnostics are lost, matching the rest of the fleet (siblings behave identically). If clyde later needs them, its own tracing subscriber must be installed BEFORE `cmd.run` (mcp-io logging is already initialized inside it), not in the build closure.
 - 2026-07-10 (panel, verified): marquee's `cli::Client` is BLOCKING (`reqwest::blocking`), so the handler uses `spawn_blocking` per call (persona pattern). Not left to the spike.
 
