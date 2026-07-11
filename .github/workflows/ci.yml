@@ -14,4 +14,4 @@ on:
 
 jobs:
   ci:
-    uses: tatari-tv/github-actions-public/.github/workflows/rust-ci.yml@main
+    uses: tatari-tv/github-actions-public/.github/workflows/rust-ci.yml@v1
