@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use log::debug;
@@ -15,6 +16,14 @@ pub struct McpIo {
     pub bin: String,
     /// Host version (`CARGO_PKG_VERSION` at the host's call site).
     pub version: String,
+    /// Extra environment variables to bake into the registered `mcpServers` entry
+    /// (Claude Code `user`/`project`) and the Desktop config's spliced entry. Empty
+    /// by default; a host sets these via [`McpIo::with_env`] so a config-time override
+    /// it resolved from its OWN flags/env (e.g. a non-default service URL) travels into
+    /// the spawned server's environment. `BTreeMap` so the emitted JSON is
+    /// deterministic. NOT baked into the shared `bundle` `.mcpb` artifact, which must
+    /// stay per-user-agnostic.
+    pub env: BTreeMap<String, String>,
 }
 
 impl McpIo {
@@ -30,7 +39,22 @@ impl McpIo {
             server_key,
             bin,
             version,
+            env: BTreeMap::new(),
         }
+    }
+
+    /// Bake extra environment variables into the registered entry (replacing any
+    /// previously set). Chains after [`crate::mcp_io!`]:
+    /// `mcp_io!(bin = "slack").with_env([("SLACK_VALET_URL".into(), url)])`. Values may
+    /// be sensitive, so only the count is logged.
+    pub fn with_env(mut self, env: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.env = env.into_iter().collect();
+        debug!(
+            "McpIo::with_env: server_key={} env_count={}",
+            self.server_key,
+            self.env.len()
+        );
+        self
     }
 }
 

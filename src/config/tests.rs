@@ -23,6 +23,21 @@ fn test_mcp_io_new_honors_server_key_override() {
 }
 
 #[test]
+fn test_mcp_io_env_defaults_empty_and_with_env_bakes() {
+    let io = McpIo::new("slack", "1.2.3", None);
+    assert!(io.env.is_empty(), "env defaults to empty");
+
+    let io = io.with_env([(
+        "SLACK_VALET_URL".to_string(),
+        "https://valet.test.tatari.dev".to_string(),
+    )]);
+    assert_eq!(
+        io.env.get("SLACK_VALET_URL").map(String::as_str),
+        Some("https://valet.test.tatari.dev")
+    );
+}
+
+#[test]
 fn test_xdg_config_dir_honors_env_and_falls_back() {
     let guard = ENV_LOCK.lock().unwrap();
     let prior = std::env::var("XDG_CONFIG_HOME").ok();

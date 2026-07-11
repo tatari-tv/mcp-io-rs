@@ -1,11 +1,13 @@
 #![allow(clippy::unwrap_used)]
 
+use std::collections::BTreeMap;
 use std::fs;
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::*;
+use crate::register::claude::entry_json;
 
 const KEY: &str = "slack";
 const CMD: &str = "/abs/path/slack";
@@ -37,10 +39,10 @@ fn test_register_fresh_creates_file() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("Claude").join("claude_desktop_config.json");
     // Parent dir does NOT exist yet: register must create it.
-    register_at(&path, KEY, CMD).unwrap();
+    register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap();
 
     let cfg = read(&path);
-    assert_eq!(cfg["mcpServers"][KEY], entry_json(CMD));
+    assert_eq!(cfg["mcpServers"][KEY], entry_json(CMD, &BTreeMap::new()));
 }
 
 #[test]
@@ -49,11 +51,11 @@ fn test_register_preserves_all_keys_and_servers() {
     let path = dir.path().join("claude_desktop_config.json");
     write(&path, &populated());
 
-    register_at(&path, KEY, CMD).unwrap();
+    register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap();
     let cfg = read(&path);
 
     // Our key landed.
-    assert_eq!(cfg["mcpServers"][KEY], entry_json(CMD));
+    assert_eq!(cfg["mcpServers"][KEY], entry_json(CMD, &BTreeMap::new()));
     // Both other servers survived, byte-value intact.
     assert_eq!(cfg["mcpServers"]["other-a"]["command"], json!("/bin/a"));
     assert_eq!(cfg["mcpServers"]["other-b"]["args"], json!(["y", "z"]));
@@ -69,7 +71,7 @@ fn test_unregister_preserves_all_keys_and_other_servers() {
     let path = dir.path().join("claude_desktop_config.json");
     write(&path, &populated());
 
-    register_at(&path, KEY, CMD).unwrap();
+    register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap();
     unregister_at(&path, KEY).unwrap();
     let cfg = read(&path);
 
@@ -89,9 +91,9 @@ fn test_second_register_is_byte_identical() {
     let path = dir.path().join("claude_desktop_config.json");
     write(&path, &populated());
 
-    register_at(&path, KEY, CMD).unwrap();
+    register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap();
     let after_first = fs::read(&path).unwrap();
-    register_at(&path, KEY, CMD).unwrap();
+    register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap();
     let after_second = fs::read(&path).unwrap();
 
     assert_eq!(
@@ -107,7 +109,7 @@ fn test_malformed_json_errors_and_leaves_file_untouched() {
     let garbage = b"{ this is not valid json ]";
     fs::write(&path, garbage).unwrap();
 
-    let err = register_at(&path, KEY, CMD).unwrap_err();
+    let err = register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap_err();
     assert!(matches!(err, Error::MalformedConfig { .. }), "got {err:?}");
     assert_eq!(
         fs::read(&path).unwrap(),
@@ -124,7 +126,7 @@ fn test_non_object_mcpservers_errors_and_leaves_file_untouched() {
     write(&path, &original);
     let bytes_before = fs::read(&path).unwrap();
 
-    let err = register_at(&path, KEY, CMD).unwrap_err();
+    let err = register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap_err();
     assert!(matches!(err, Error::McpServersNotObject { .. }), "got {err:?}");
     assert_eq!(fs::read(&path).unwrap(), bytes_before, "file must be untouched");
 }
@@ -135,7 +137,7 @@ fn test_non_object_toplevel_errors_and_leaves_file_untouched() {
     let path = dir.path().join("claude_desktop_config.json");
     fs::write(&path, b"[1, 2, 3]").unwrap();
 
-    let err = register_at(&path, KEY, CMD).unwrap_err();
+    let err = register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap_err();
     assert!(matches!(err, Error::ConfigNotObject { .. }), "got {err:?}");
     assert_eq!(fs::read(&path).unwrap(), b"[1, 2, 3]", "file must be untouched");
 }
@@ -146,9 +148,9 @@ fn test_zero_byte_file_starts_fresh() {
     let path = dir.path().join("claude_desktop_config.json");
     fs::write(&path, b"").unwrap();
 
-    register_at(&path, KEY, CMD).unwrap();
+    register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap();
     let cfg = read(&path);
-    assert_eq!(cfg["mcpServers"][KEY], entry_json(CMD));
+    assert_eq!(cfg["mcpServers"][KEY], entry_json(CMD, &BTreeMap::new()));
 }
 
 #[test]
@@ -183,7 +185,7 @@ fn test_key_present_detection() {
 
     assert!(key_present(&path, "other-a"));
     assert!(!key_present(&path, KEY));
-    register_at(&path, KEY, CMD).unwrap();
+    register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap();
     assert!(key_present(&path, KEY));
     // A missing file reports false, never errors.
     assert!(!key_present(&dir.path().join("nope.json"), KEY));
@@ -199,7 +201,7 @@ fn test_register_preserves_file_permissions() {
     write(&path, &populated());
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
 
-    register_at(&path, KEY, CMD).unwrap();
+    register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap();
 
     let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "atomic write must preserve the original file mode");
