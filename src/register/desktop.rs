@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -42,7 +43,7 @@ pub(crate) fn register(io: &McpIo) -> Result<()> {
         path.display()
     );
     let command = super::current_exe()?;
-    register_at(&path, &io.server_key, &command)
+    register_at(&path, &io.server_key, &command, &io.env)
 }
 
 /// Remove `io.server_key` from Claude Desktop's config via the same direct-write path.
@@ -86,9 +87,10 @@ fn read_config(path: &Path) -> Result<Map<String, Value>> {
 }
 
 /// Splice `key` -> stdio entry into `mcpServers`, preserving every other key, then
-/// write atomically. See [`read_config`] for the file-state edge handling.
-fn register_at(path: &Path, key: &str, command: &str) -> Result<()> {
-    debug!("register_at: path={} key={key}", path.display());
+/// write atomically. `env` is baked into the entry when non-empty (mirrors the
+/// Claude Code path). See [`read_config`] for the file-state edge handling.
+fn register_at(path: &Path, key: &str, command: &str, env: &BTreeMap<String, String>) -> Result<()> {
+    debug!("register_at: path={} key={key} env_count={}", path.display(), env.len());
     let mut config = read_config(path)?;
 
     // `or_insert_with` only fires when `mcpServers` is absent; a present-but-non-object
@@ -96,7 +98,7 @@ fn register_at(path: &Path, key: &str, command: &str) -> Result<()> {
     let servers = config.entry(MCP_SERVERS).or_insert_with(|| Value::Object(Map::new()));
     match servers {
         Value::Object(servers) => {
-            servers.insert(key.to_string(), entry_json(command));
+            servers.insert(key.to_string(), entry_json(command, env));
         }
         _ => {
             return Err(Error::McpServersNotObject {

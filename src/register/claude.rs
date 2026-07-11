@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -24,15 +25,26 @@ fn scope(target: Target) -> &'static str {
     }
 }
 
-/// The `mcpServers` entry we register: `{ "type":"stdio", "command":<abs>, "args":["mcp","serve"] }`.
-/// Verified byte-for-byte against a real `claude mcp add-json` invocation (Phase 3
-/// notes). `command` is the resolved absolute path to THIS build, never a $PATH guess.
-pub(crate) fn entry_json(command: &str) -> serde_json::Value {
-    json!({
+/// The `mcpServers` entry we register: `{ "type":"stdio", "command":<abs>, "args":["mcp","serve"] }`,
+/// plus an `env` object when `env` is non-empty. Verified byte-for-byte against a real
+/// `claude mcp add-json` invocation (Phase 3 notes); an EMPTY `env` yields exactly that
+/// checked shape (no `env` key), so an unconfigured host is unchanged. `command` is the
+/// resolved absolute path to THIS build, never a $PATH guess. Deterministic env key
+/// order (the source is a `BTreeMap`).
+pub(crate) fn entry_json(command: &str, env: &BTreeMap<String, String>) -> serde_json::Value {
+    let mut entry = json!({
         "type": "stdio",
         "command": command,
         "args": ["mcp", "serve"],
-    })
+    });
+    if !env.is_empty() {
+        let obj = env
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect();
+        entry["env"] = serde_json::Value::Object(obj);
+    }
+    entry
 }
 
 /// The argv for `claude mcp add-json <key> <json> -s <scope>`.
@@ -61,7 +73,12 @@ fn remove_args(key: &str, scope: &str) -> Vec<String> {
 /// Register `io.server_key` -> `current_exe()` into Claude Code config scope
 /// `target` (`user` or `project`) by shelling out to `claude mcp add-json`. This
 /// treats the target config (`~/.claude.json` global state, or `./.mcp.json`) as
-/// OPAQUE, so there is zero risk of dropping the user's unrelated keys. Idempotent.
+/// OPAQUE, so there is zero risk of dropping the user's unrelated keys.
+///
+/// Idempotent: `claude mcp add-json` REFUSES to overwrite an existing key (it exits
+/// non-zero with "already exists"), so when the key is already present we `remove` it
+/// first and then add. That makes a re-register an UPDATE, which is how a changed
+/// [`McpIo::env`] (or command path) reaches an already-registered entry.
 pub(crate) fn register(io: &McpIo, target: Target) -> Result<()> {
     let scope = scope(target);
     debug!(
@@ -69,9 +86,15 @@ pub(crate) fn register(io: &McpIo, target: Target) -> Result<()> {
         io.bin, io.server_key
     );
     let command = super::current_exe()?;
-    let json = entry_json(&command).to_string();
-    let args = add_json_args(&io.server_key, &json, scope);
-    run_claude(&args)?;
+    let json = entry_json(&command, &io.env).to_string();
+    if super::is_registered(io, target) {
+        debug!(
+            "claude::register: {} already present in {scope} scope; removing before re-add",
+            io.server_key
+        );
+        run_claude(&remove_args(&io.server_key, scope))?;
+    }
+    run_claude(&add_json_args(&io.server_key, &json, scope))?;
     debug!("claude::register: registered {} in {scope} scope", io.server_key);
     Ok(())
 }

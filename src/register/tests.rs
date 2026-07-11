@@ -144,7 +144,7 @@ mod contract {
         let example = &contract["entry"]["example"];
         let command = example["command"].as_str().unwrap();
         assert_eq!(
-            &crate::register::claude::entry_json(command),
+            &crate::register::claude::entry_json(command, &std::collections::BTreeMap::new()),
             example,
             "claude::entry_json() diverged from the checked contract fixture"
         );
