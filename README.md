@@ -32,9 +32,30 @@ Add the dep, pinned to a tag (see the design doc's Rollout Plan for the tag
 
 ```toml
 [dependencies]
-mcp-io = { git = "https://github.com/tatari-tv/mcp-io-rs", tag = "vX.Y.Z" }
+mcp-io = { git = "https://github.com/tatari-tv/mcp-io-rs", tag = "vX.Y.Z", version = "X.Y.Z" }
+rmcp = { version = "3.1", features = ["server", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 ```
+
+Set BOTH `tag =` and `version =` on the `mcp-io` line, or cargo fails to resolve
+the git dep.
+
+### rmcp is a PUBLIC dependency: its major is our minor
+
+`mcp-io`'s public surface is generic over `rmcp::ServerHandler` and its `Error`
+boxes rmcp types, so **rmcp is a public dependency, not an internal one.** Two
+consequences, and neither is optional:
+
+- **Your rmcp major MUST match the one `mcp-io` pins.** Cargo links two majors as
+  two distinct crates with two distinct `ServerHandler` traits, so a mismatch is a
+  compile error (`E0277`, "there are multiple different versions of crate `rmcp`"),
+  not a warning. Repoint the `mcp-io` tag and bump your own `rmcp` in the SAME
+  commit -- splitting them leaves a commit that cannot build.
+- **An rmcp MAJOR bump is a MINOR bump here**, because `mcp-io` is still 0.x. It is
+  a breaking change for every consumer even when no source line changes. A consumer
+  sitting on an older `mcp-io` tag keeps resolving that tag's rmcp and keeps
+  compiling indefinitely, so there is no deadline to move -- only lockstep at the
+  moment you do.
 
 Consuming a private repo needs the same `CARGO_NET_GIT_FETCH_WITH_CLI` +
 `insteadOf` recipe already used for `okta-auth-rs`.

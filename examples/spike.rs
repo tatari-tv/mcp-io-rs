@@ -1,10 +1,15 @@
 //! Phase 0 spike (THROWAWAY): prove the one foundational seam the whole `mcp-io`
 //! library rests on -- a generic `serve<H: rmcp::ServerHandler>(handler)` that
-//! compiles AND handshakes over stdio on rmcp 2.1.0.
+//! compiles AND handshakes over stdio on rmcp 3.1.
 //!
 //! This is NOT product code. It exists only to de-risk the seam before Phase 1
 //! scaffolds the real crate. Phase 2 reproduces the exact `serve<H>` shape proven
 //! here as production code.
+//!
+//! The rmcp version above tracks the crate's actual pin (it read 2.1.0 through the
+//! 2.2 era and was corrected during the 3.1 cutover). The PERMANENT wire guarantee
+//! does not live here -- this example is throwaway by its own header, so the pinned
+//! frame assertions live in `tests/wire.rs`.
 //!
 //! Headless proof (a real stdio MCP handshake, no GUI Inspector):
 //!
