@@ -44,6 +44,20 @@ pub enum Error {
         stderr: String,
     },
 
+    // The fail-closed ownership refusal: the key is taken by a server we did not
+    // register. Both destructive verbs stop here, naming the key, what is actually
+    // registered under it, and the override, because the alternative is deleting
+    // somebody else's MCP server that happens to share our name.
+    #[error(
+        "'{key}' in the {target} config is registered to {command}, which this build did not register. \
+         Refusing to replace or remove it; re-run with --force to override."
+    )]
+    ForeignEntry {
+        key: String,
+        target: &'static str,
+        command: String,
+    },
+
     // Desktop direct-write edges: the file exists but we refuse to touch it.
     #[error("config at {path} is not valid JSON, refusing to overwrite: {source}")]
     MalformedConfig { path: String, source: serde_json::Error },

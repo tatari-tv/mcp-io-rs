@@ -61,7 +61,13 @@ struct TestCli {
 #[test]
 fn test_register_target_defaults_to_user() {
     let cli = TestCli::parse_from(["test", "register"]);
-    assert!(matches!(cli.cmd, McpSub::Register { target: Target::User }));
+    assert!(matches!(
+        cli.cmd,
+        McpSub::Register {
+            target: Target::User,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -70,7 +76,8 @@ fn test_register_target_accepts_kebab_case() {
     assert!(matches!(
         cli.cmd,
         McpSub::Register {
-            target: Target::Project
+            target: Target::Project,
+            ..
         }
     ));
 }
@@ -81,7 +88,32 @@ fn test_register_target_is_case_insensitive() {
     assert!(matches!(
         cli.cmd,
         McpSub::Register {
-            target: Target::Desktop
+            target: Target::Desktop,
+            ..
+        }
+    ));
+}
+
+/// `--force` is the ownership guard's only override, so its DEFAULT is the part
+/// that matters: absent means fail-closed.
+#[test]
+fn test_register_force_defaults_off_and_parses() {
+    let cli = TestCli::parse_from(["test", "register"]);
+    assert!(matches!(cli.cmd, McpSub::Register { force: false, .. }));
+    let cli = TestCli::parse_from(["test", "register", "--force"]);
+    assert!(matches!(cli.cmd, McpSub::Register { force: true, .. }));
+}
+
+#[test]
+fn test_unregister_force_defaults_off_and_parses() {
+    let cli = TestCli::parse_from(["test", "unregister"]);
+    assert!(matches!(cli.cmd, McpSub::Unregister { force: false, .. }));
+    let cli = TestCli::parse_from(["test", "unregister", "--force", "--target", "desktop"]);
+    assert!(matches!(
+        cli.cmd,
+        McpSub::Unregister {
+            target: Target::Desktop,
+            force: true
         }
     ));
 }

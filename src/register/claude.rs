@@ -25,6 +25,14 @@ fn scope(target: Target) -> &'static str {
     }
 }
 
+/// The `type` our entry declares, and the only value the ownership check accepts
+/// when the field is present. Named once so the writer and the check cannot drift.
+pub(crate) const STDIO: &str = "stdio";
+
+/// The `args` our entry declares. Same reason: the ownership check compares against
+/// exactly what this writer emits.
+pub(crate) const SERVE_ARGS: [&str; 2] = ["mcp", "serve"];
+
 /// The `mcpServers` entry we register: `{ "type":"stdio", "command":<abs>, "args":["mcp","serve"] }`,
 /// plus an `env` object when `env` is non-empty. Verified byte-for-byte against a real
 /// `claude mcp add-json` invocation (Phase 3 notes); an EMPTY `env` yields exactly that
@@ -33,9 +41,9 @@ fn scope(target: Target) -> &'static str {
 /// order (the source is a `BTreeMap`).
 pub(crate) fn entry_json(command: &str, env: &BTreeMap<String, String>) -> serde_json::Value {
     let mut entry = json!({
-        "type": "stdio",
+        "type": STDIO,
         "command": command,
-        "args": ["mcp", "serve"],
+        "args": SERVE_ARGS,
     });
     if !env.is_empty() {
         let obj = env
@@ -73,12 +81,16 @@ fn remove_args(key: &str, scope: &str) -> Vec<String> {
 /// Register `io.server_key` -> `current_exe()` into Claude Code config scope
 /// `target` (`user` or `project`) by shelling out to `claude mcp add-json`. This
 /// treats the target config (`~/.claude.json` global state, or `./.mcp.json`) as
-/// OPAQUE, so there is zero risk of dropping the user's unrelated keys.
+/// OPAQUE, so no unrelated KEY is ever dropped.
 ///
-/// Idempotent: `claude mcp add-json` REFUSES to overwrite an existing key (it exits
-/// non-zero with "already exists"), so when the key is already present we `remove` it
-/// first and then add. That makes a re-register an UPDATE, which is how a changed
-/// [`McpIo::env`] (or command path) reaches an already-registered entry.
+/// The one key that is NOT protected by that opacity is our OWN: `claude mcp
+/// add-json` refuses to overwrite an existing key (it exits non-zero with "already
+/// exists"), so when the key is already present we `remove` it first and then add.
+/// That makes a re-register an UPDATE, which is how a changed [`McpIo::env`] (or
+/// command path) reaches an already-registered entry -- and it also disarms Claude's
+/// own refusal for that key. The ownership guard in [`crate::register::register`]
+/// runs BEFORE this and is what keeps the `remove` from deleting somebody else's
+/// server that happens to share our key.
 pub(crate) fn register(io: &McpIo, target: Target) -> Result<()> {
     let scope = scope(target);
     debug!(

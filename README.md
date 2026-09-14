@@ -149,9 +149,9 @@ warning on stderr if they differ.
 | Verb | Builds the handler? | What it does |
 |---|---|---|
 | `mcp serve` | yes | Serves the host's tools over stdio until the client disconnects. |
-| `mcp register --target <t>` | no | Writes this build's entry into a Claude config target. |
-| `mcp unregister --target <t>` | no | Removes this build's entry from a Claude config target. |
-| `mcp status` | yes (token-free) | Reports which targets carry the entry, and warns on a `get_info` name mismatch. |
+| `mcp register --target <t> [--force]` | no | Writes this build's entry into a Claude config target. Refuses a key registered by another tool unless `--force`. |
+| `mcp unregister --target <t> [--force]` | no | Removes this build's entry from a Claude config target. Same refusal, same override. |
+| `mcp status` | yes (token-free) | Reports, per target, whether the entry is ours, foreign, or absent, and warns on a `get_info` name mismatch. Always exits 0. |
 | `mcp bundle [--out <path>]` | yes | Packages a `.mcpb` for Claude Desktop / Cowork. |
 
 `register`/`unregister`/`status` never build the handler for a login/token --
@@ -170,8 +170,10 @@ be authenticated to register, unregister, or check status.
 | `desktop` | direct, Value-preserving atomic write (no `claude` CLI in a Desktop-only install) | macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`; Linux (community build): `$XDG_CONFIG_HOME/Claude/claude_desktop_config.json` if set and absolute, else `~/.config/Claude/claude_desktop_config.json` |
 
 Claude Code targets treat the config as opaque (shelling out to the `claude`
-CLI, never parsing `~/.claude.json` for a write), so there is zero risk of
-dropping the user's unrelated global state. The `desktop` target parses as
+CLI, never parsing `~/.claude.json` for a write), so no unrelated global state is
+dropped. Opacity does NOT protect the one key we write: a re-register removes
+that key before it re-adds it, which is why both destructive verbs run the
+ownership check below first. The `desktop` target parses as
 `serde_json::Value`, splices only `mcpServers.<key>`, and writes atomically
 (`tempfile_in` the same directory, fsync, rename) -- every other top-level key
 and every other registered server survives register and unregister. A missing
@@ -184,6 +186,26 @@ The registered `command` is always the resolved absolute path to *this build*
 (`std::env::current_exe()`), never a `$PATH` guess, and `args` is always
 `["mcp", "serve"]`. This exact shape is the checked contract artifact -- see
 below.
+
+### The ownership check
+
+The server key is just a name, and another tool can already own it (the case
+that prompted this: a community `xoxc` slack MCP server registered under
+`slack`). Both destructive verbs therefore look before they write. The existing
+entry under our key is **ours** only when all three hold:
+
+- `type` is absent, or `"stdio"` (absent is normal: a `.mcpb` bundle-installed
+  entry carries only `command` and `args`),
+- `args` is exactly `["mcp", "serve"]`,
+- the `command`'s *basename* is the host's `bin` or the basename of
+  `current_exe()` -- basename, not the full path, so a binary reinstalled from
+  `~/.cargo/bin` to `~/.local/bin` is still recognized as ours.
+
+`env` is ignored entirely (it legitimately varies per host). Anything else
+reads as foreign, and `register`/`unregister` refuse with a non-zero exit
+naming the key, what is actually registered under it, and `--force`. `--force`
+skips the check: it is the intentional take-over / cleanup path. An absent key
+registers with no prompt, and unregisters as a no-op, exactly as before.
 
 ## The checked contract artifact
 

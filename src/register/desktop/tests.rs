@@ -191,6 +191,75 @@ fn test_key_present_detection() {
     assert!(!key_present(&dir.path().join("nope.json"), KEY));
 }
 
+/// The ownership predicate reads the file directly, so it is unit-testable against
+/// a temp config with no env redirection. The per-conjunct matrix (a `type: "sse"`
+/// entry, an absent-`type` bundle entry, wrong `args`) lands in Phase 2; these pin
+/// the three OUTCOMES the guard branches on.
+fn io_named(bin: &str) -> McpIo {
+    McpIo::new(bin, "0.0.0", None)
+}
+
+#[test]
+fn test_entry_is_ours_accepts_what_register_wrote() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("claude_desktop_config.json");
+    write(&path, &populated());
+    // Registered under key "slack" with command "/abs/path/slack": the basename
+    // matches `bin`, so a DIFFERENT install path still reads as ours.
+    register_at(&path, KEY, CMD, &BTreeMap::new()).unwrap();
+
+    assert_eq!(entry_is_ours(&io_named(KEY), &path), Ownership::Ours);
+}
+
+#[test]
+fn test_entry_is_ours_reports_absent_for_a_missing_key_or_file() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("claude_desktop_config.json");
+    write(&path, &populated());
+
+    assert_eq!(entry_is_ours(&io_named(KEY), &path), Ownership::Absent);
+    assert_eq!(
+        entry_is_ours(&io_named(KEY), &dir.path().join("nope.json")),
+        Ownership::Absent
+    );
+}
+
+#[test]
+fn test_entry_is_ours_reports_foreign_for_another_tools_command() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("claude_desktop_config.json");
+    let mut config = populated();
+    config["mcpServers"][KEY] = json!({
+        "command": "npx",
+        "args": ["-y", "slack-mcp-server@latest"]
+    });
+    write(&path, &config);
+
+    assert_eq!(
+        entry_is_ours(&io_named(KEY), &path),
+        Ownership::Foreign {
+            command: Some("npx".to_string())
+        }
+    );
+}
+
+/// A URL-based entry has no string `command` at all. The refusal must say so
+/// instead of printing an empty command, so the predicate reports `None` rather
+/// than an invented value.
+#[test]
+fn test_entry_is_ours_reports_foreign_without_a_command() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("claude_desktop_config.json");
+    let mut config = populated();
+    config["mcpServers"][KEY] = json!({ "type": "sse", "url": "https://example.invalid/sse" });
+    write(&path, &config);
+
+    assert_eq!(
+        entry_is_ours(&io_named(KEY), &path),
+        Ownership::Foreign { command: None }
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn test_register_preserves_file_permissions() {
