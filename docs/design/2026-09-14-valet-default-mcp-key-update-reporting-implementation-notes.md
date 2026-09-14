@@ -73,3 +73,81 @@ Design doc: `tatari-tv/slack-cli` `docs/design/2026-09-14-valet-default-mcp-key-
   Phase 2 adds many more env-touching tests; `lock().unwrap_or_else(|e| e.into_inner())`
   would keep a single failure readable. Not changed here (pre-existing, and not this
   phase's scope).
+
+## Phase 2 (W2): Cover the reported scenario end to end
+
+Test-only phase: no production code in `src/register/desktop.rs`, `claude.rs`, or
+`mod.rs` changed. `git diff` on `src/register/desktop.rs` is empty at commit time.
+
+### Design decisions
+- The two `type`-conjunct fixtures (success criterion 3) land as direct unit tests on
+  `entry_is_ours` in `src/register/desktop/tests.rs`, the same style as Phase 1's three
+  outcome tests: `test_entry_is_ours_reports_foreign_when_type_is_not_stdio` (our
+  command basename + our args + `type: "sse"` -> `Foreign`) and
+  `test_entry_is_ours_accepts_a_bundle_entry_with_no_type_key` (command + args, no
+  `type` key at all -> `Ours`, the `.mcpb` bundle-installed shape).
+- Claude Code path coverage (`src/register/tests.rs`) needed no faked `claude` binary.
+  `guard()` reads the target's config file directly via `ownership()` and refuses
+  BEFORE `claude::register`/`claude::unregister` ever calls `Command::new("claude")`,
+  so `test_register_refuses_a_foreign_entry_on_claude_user_scope_...` and its
+  `unregister` counterpart exercise the real production guard unconditionally, with no
+  `claude_available()` skip and no fixture CLI. A `ClaudeUserHome` helper mirrors the
+  existing `DesktopHome` (`CLAUDE_CONFIG_DIR` redirected to a temp dir, restored on
+  `Drop`), pointed at `claude::config_path(Target::User)` instead of the desktop
+  resolver.
+- `status`'s foreign-entry coverage (`test_status_reports_foreign_ownership_and_never_writes`)
+  asserts `ownership(&io, target)` directly for both `Target::Desktop` and
+  `Target::User`, since that private fn is exactly what backs every line `status`
+  prints, plus a call to `status` itself (asserting `EXIT_SUCCESS`, its documented
+  behavior) and a before/after byte comparison on both config files, since `status`
+  never writes.
+- `entry_is_ours`, `ownership`, and `Ownership` are `pub(crate)`/private items reached
+  through `use super::*;`; `tests` is a child module of `register`, so it sees them
+  without any visibility change.
+
+### Deviations
+- Success criterion 1, read literally ("each asserts BOTH the non-zero result AND
+  byte-identical", "per verb" naming `register`/`unregister`/`status`), does not hold
+  for `status` as specified: `status` is documented in this same design (Architecture,
+  and W2 Phase 1's own success criteria) to keep exit 0 for all three ownership states,
+  and Phase 1 already shipped and tested that. Making `status` return non-zero on a
+  foreign entry would be a PRODUCTION behavior change, which this phase is not
+  authorized to make and which the design doc itself forbids elsewhere. Implemented at
+  the correct seam instead: `status`'s foreign-entry test asserts the exit code stays
+  `EXIT_SUCCESS` (matching the documented contract) and asserts the `ownership()` call
+  that backs its report returns `Foreign`, which is the assertion that actually breaks
+  if the predicate regresses. The config-file-untouched half of the criterion holds
+  trivially for `status` (it is read-only on every path) and is still asserted for both
+  configs.
+- `ENV_LOCK.lock().unwrap()` -> `.lock().unwrap_or_else(|e| e.into_inner())` across
+  `src/register/tests.rs` and `src/register/claude/tests.rs` (12 call sites; no
+  occurrences in `src/register/desktop/tests.rs`). Authorized by the parent as scope
+  beyond this phase's bullets: it is what Phase 1 recorded as an open question, and
+  without it the break-to-prove step (criterion 2) is unreadable, since the first test
+  that panics against a reverted predicate poisons the shared mutex and every later
+  env-touching test in the same run then fails with `PoisonError` instead of its own
+  assertion, masking which assertions actually caught the regression. No behavior
+  change outside the test binary: `ENV_LOCK` only ever guards process-env mutation
+  inside `#[cfg(test)]` code.
+
+### Tradeoffs
+- Faked `claude` CLI vs relying on the guard's short-circuit: the phase brief allowed
+  for a faked `claude` CLI on the Claude Code path. Not built, because the refusal
+  path, which is the behavior success criteria 1 and 2 need, never reaches
+  `Command::new`, so a fake binary would add a moving part (a script to keep
+  byte-compatible with `claude mcp add-json`/`remove` output) that no assertion needs.
+  The existing `claude_available()`-gated round-trip tests (`test_claude_user_roundtrip`,
+  `test_register_is_idempotent_and_bakes_env`) already cover the live-CLI success
+  path and are unmodified.
+- Break-to-prove was done by temporarily short-circuiting `entry_is_ours` to
+  presence-only (`return Ownership::Ours;` right after the key-presence check) rather
+  than reverting to a saved pre-Phase-1 copy of the function, since Phase 1's version
+  already replaced the old presence-only body; the short-circuit reproduces the exact
+  pre-Phase-1 defect (any present entry reads `Ours`) with a two-line, easy-to-revert
+  change. Reverted before running `cargo fmt`/`otto ci`; `git diff` on
+  `src/register/desktop.rs` is empty at commit time.
+
+### Open questions
+- None new. Phase 1's ENV_LOCK poisoning item is resolved by this phase's authorized
+  fix and does not carry forward. This is the last phase in this repo (W2 Phase 2 of
+  2); nothing else is open on the mcp-io-rs side of this design doc.

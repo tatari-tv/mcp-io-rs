@@ -260,6 +260,55 @@ fn test_entry_is_ours_reports_foreign_without_a_command() {
     );
 }
 
+/// The `type` conjunct's first half: OUR command basename and OUR args, but a
+/// non-stdio `type`, must read Foreign. This is the hole absent-OR-`"stdio"`
+/// closes over a bare presence check -- a foreign `sse`/`http` server that
+/// happens to carry our command and args must not be waved through.
+#[test]
+fn test_entry_is_ours_reports_foreign_when_type_is_not_stdio() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("claude_desktop_config.json");
+    let mut config = populated();
+    config["mcpServers"][KEY] = json!({
+        "type": "sse",
+        "command": CMD,
+        "args": ["mcp", "serve"]
+    });
+    write(&path, &config);
+
+    assert_eq!(
+        entry_is_ours(&io_named(KEY), &path),
+        Ownership::Foreign {
+            command: Some(CMD.to_string())
+        },
+        "our command + our args does not excuse a non-stdio type"
+    );
+}
+
+/// The `type` conjunct's second half: NO `type` key at all is the `.mcpb`
+/// bundle-installed shape (`src/bundle.rs` never emits `type`), and must read
+/// Ours. Demanding a PRESENT `type` would make our own bundle-installed entry
+/// read Foreign and refuse to be touched by `register --target desktop`.
+#[test]
+fn test_entry_is_ours_accepts_a_bundle_entry_with_no_type_key() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("claude_desktop_config.json");
+    let mut config = populated();
+    config["mcpServers"][KEY] = json!({
+        "command": CMD,
+        "args": ["mcp", "serve"]
+    });
+    let entry = &config["mcpServers"][KEY];
+    assert!(entry.get("type").is_none(), "fixture must carry no type key at all");
+    write(&path, &config);
+
+    assert_eq!(
+        entry_is_ours(&io_named(KEY), &path),
+        Ownership::Ours,
+        "an absent type is the bundle-installed shape and must read as ours"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn test_register_preserves_file_permissions() {

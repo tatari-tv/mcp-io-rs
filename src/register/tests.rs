@@ -59,7 +59,7 @@ fn test_current_exe_is_absolute() {
 /// mismatch-warning branch.
 #[test]
 fn test_status_exits_ok_on_name_mismatch() {
-    let guard = ENV_LOCK.lock().unwrap();
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let prior = std::env::var("CLAUDE_CONFIG_DIR").ok();
     let dir = TempDir::new().unwrap();
     unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
@@ -77,7 +77,7 @@ fn test_status_exits_ok_on_name_mismatch() {
 
 #[test]
 fn test_status_exits_ok_on_matching_name_and_build_error() {
-    let guard = ENV_LOCK.lock().unwrap();
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let prior = std::env::var("CLAUDE_CONFIG_DIR").ok();
     let dir = TempDir::new().unwrap();
     unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
@@ -109,7 +109,7 @@ fn test_claude_user_roundtrip() {
         eprintln!("SKIP test_claude_user_roundtrip: `claude` not on PATH");
         return;
     }
-    let guard = ENV_LOCK.lock().unwrap();
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let prior = std::env::var("CLAUDE_CONFIG_DIR").ok();
     let dir = TempDir::new().unwrap();
     unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
@@ -181,6 +181,42 @@ fn restore(key: &str, prior: Option<OsString>) {
     }
 }
 
+/// Same shape as [`DesktopHome`], for the Claude Code `user` scope:
+/// `CLAUDE_CONFIG_DIR` redirected to a temp dir, restored on drop. The resolved
+/// path is `claude::config_path(Target::User)`, i.e. `<dir>/.claude.json`.
+struct ClaudeUserHome {
+    dir: TempDir,
+    prior: Option<OsString>,
+}
+
+impl ClaudeUserHome {
+    fn new() -> Self {
+        let dir = TempDir::new().unwrap();
+        let prior = std::env::var_os("CLAUDE_CONFIG_DIR");
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
+        Self { dir, prior }
+    }
+
+    /// The REAL resolver's answer, asserted inside the temp dir so a test can
+    /// never touch the developer's own `~/.claude.json`.
+    fn config(&self) -> std::path::PathBuf {
+        let path = claude::config_path(Target::User).unwrap();
+        assert!(
+            path.starts_with(self.dir.path()),
+            "claude user config path {} escaped the temp home {}",
+            path.display(),
+            self.dir.path().display()
+        );
+        path
+    }
+}
+
+impl Drop for ClaudeUserHome {
+    fn drop(&mut self) {
+        restore("CLAUDE_CONFIG_DIR", self.prior.take());
+    }
+}
+
 /// The reported scenario: the community `xoxc` slack MCP server sitting under OUR
 /// key, next to an unrelated server. This is the entry `register` used to delete.
 fn foreign_config(key: &str) -> Value {
@@ -212,7 +248,7 @@ fn read(path: &std::path::Path) -> Value {
 /// config came back with the `xoxc` entry replaced by ours and an exit code of 0.
 #[test]
 fn test_register_refuses_a_foreign_entry_and_leaves_the_file_byte_identical() {
-    let guard = ENV_LOCK.lock().unwrap();
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let home = DesktopHome::new();
     let io = make_io();
     let path = home.config();
@@ -237,7 +273,7 @@ fn test_register_refuses_a_foreign_entry_and_leaves_the_file_byte_identical() {
 /// Success criterion (2): the same scenario with `--force` replaces the entry.
 #[test]
 fn test_register_force_replaces_a_foreign_entry() {
-    let guard = ENV_LOCK.lock().unwrap();
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let home = DesktopHome::new();
     let io = make_io();
     let path = home.config();
@@ -263,7 +299,7 @@ fn test_register_force_replaces_a_foreign_entry() {
 /// same override.
 #[test]
 fn test_unregister_refuses_a_foreign_entry_until_forced() {
-    let guard = ENV_LOCK.lock().unwrap();
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let home = DesktopHome::new();
     let io = make_io();
     let path = home.config();
@@ -283,12 +319,60 @@ fn test_unregister_refuses_a_foreign_entry_until_forced() {
     drop(guard);
 }
 
+/// The reported scenario, replayed on the Claude Code `user` scope. The guard
+/// reads `claude::config_path(Target::User)` directly and refuses BEFORE
+/// `claude::register` ever shells out to the real `claude` binary, so this needs
+/// no live CLI and runs unconditionally (unlike the round-trip tests above).
+#[test]
+fn test_register_refuses_a_foreign_entry_on_claude_user_scope_and_leaves_the_file_byte_identical() {
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let home = ClaudeUserHome::new();
+    let io = make_io();
+    let path = home.config();
+    seed(&path, &foreign_config(&io.server_key));
+    let before = fs::read(&path).unwrap();
+
+    assert_eq!(
+        register(&io, Target::User, false),
+        EXIT_FAILURE,
+        "register must refuse a key registered by somebody else, before ever invoking `claude`"
+    );
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        before,
+        "the refused config must be byte-for-byte untouched"
+    );
+
+    drop(home);
+    drop(guard);
+}
+
+/// Same scenario, `unregister` on the Claude Code `user` scope. `claude::unregister`
+/// shells straight to `claude mcp remove` with no presence check of its own, so the
+/// guard in front of it is the ONLY thing standing between a foreign entry and
+/// deletion on this path.
+#[test]
+fn test_unregister_refuses_a_foreign_entry_on_claude_user_scope_until_forced() {
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let home = ClaudeUserHome::new();
+    let io = make_io();
+    let path = home.config();
+    seed(&path, &foreign_config(&io.server_key));
+    let before = fs::read(&path).unwrap();
+
+    assert_eq!(unregister(&io, Target::User, false), EXIT_FAILURE);
+    assert_eq!(fs::read(&path).unwrap(), before, "refusal must not write");
+
+    drop(home);
+    drop(guard);
+}
+
 /// The guard must accept what the writer wrote: a plain re-register of OUR OWN
 /// entry needs no `--force`. A predicate that failed here would be a guard firing
 /// on the happy path, which is how safety checks get disabled.
 #[test]
 fn test_register_over_our_own_entry_needs_no_force() {
-    let guard = ENV_LOCK.lock().unwrap();
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let home = DesktopHome::new();
     let io = make_io();
     let path = home.config();
@@ -306,7 +390,7 @@ fn test_register_over_our_own_entry_needs_no_force() {
 /// every one of them (persona-cli asserts only the exit code).
 #[test]
 fn test_status_exits_ok_for_every_ownership_state() {
-    let guard = ENV_LOCK.lock().unwrap();
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let home = DesktopHome::new();
     let io = make_io();
     let path = home.config();
@@ -320,6 +404,57 @@ fn test_status_exits_ok_for_every_ownership_state() {
     assert_eq!(register(&io, Target::Desktop, true), EXIT_SUCCESS);
     assert_eq!(status(&io, || Ok::<_, Infallible>(DummyHandler)), EXIT_SUCCESS);
 
+    drop(home);
+    drop(guard);
+}
+
+/// `status` itself KEEPS exit 0 for every ownership state by design (Architecture,
+/// W2 Phase 1: no consumer asserts its text, persona-cli asserts only the exit
+/// code), so "the call failed" does not apply to this verb the way it does to
+/// `register`/`unregister`. What backs its report is [`ownership`], read for every
+/// target -- so this asserts THAT returns `Foreign` for a foreign entry, on both
+/// the desktop and the Claude Code user scope, and that a call to `status` (which
+/// never writes) leaves each config byte-identical.
+#[test]
+fn test_status_reports_foreign_ownership_and_never_writes() {
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let home = DesktopHome::new();
+    let claude_home = ClaudeUserHome::new();
+    let io = make_io();
+    let desktop_path = home.config();
+    let claude_path = claude_home.config();
+    seed(&desktop_path, &foreign_config(&io.server_key));
+    seed(&claude_path, &foreign_config(&io.server_key));
+    let desktop_before = fs::read(&desktop_path).unwrap();
+    let claude_before = fs::read(&claude_path).unwrap();
+
+    assert_eq!(
+        ownership(&io, Target::Desktop).unwrap(),
+        Ownership::Foreign {
+            command: Some("npx".to_string())
+        },
+        "status's desktop report is backed by this exact call"
+    );
+    assert_eq!(
+        ownership(&io, Target::User).unwrap(),
+        Ownership::Foreign {
+            command: Some("npx".to_string())
+        },
+        "status's claude-user report is backed by this exact call"
+    );
+    assert_eq!(status(&io, || Ok::<_, Infallible>(DummyHandler)), EXIT_SUCCESS);
+    assert_eq!(
+        fs::read(&desktop_path).unwrap(),
+        desktop_before,
+        "status must never write"
+    );
+    assert_eq!(
+        fs::read(&claude_path).unwrap(),
+        claude_before,
+        "status must never write"
+    );
+
+    drop(claude_home);
     drop(home);
     drop(guard);
 }
@@ -366,7 +501,7 @@ mod contract {
         let contract = fixture();
         let filename = contract["targets"]["user"]["config-file"].as_str().unwrap();
 
-        let guard = ENV_LOCK.lock().unwrap();
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prior = std::env::var("CLAUDE_CONFIG_DIR").ok();
         let dir = TempDir::new().unwrap();
         unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
