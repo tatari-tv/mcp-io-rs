@@ -66,7 +66,7 @@ fn test_register_is_idempotent_and_bakes_env() {
         eprintln!("SKIP test_register_is_idempotent_and_bakes_env: `claude` not on PATH");
         return;
     }
-    let guard = ENV_LOCK.lock().unwrap();
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let prior = std::env::var("CLAUDE_CONFIG_DIR").ok();
 
     let dir = tempfile::TempDir::new().unwrap();
@@ -117,7 +117,7 @@ fn test_remove_args() {
 
 #[test]
 fn test_user_config_path_honors_env() {
-    let guard = ENV_LOCK.lock().unwrap();
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let prior = std::env::var("CLAUDE_CONFIG_DIR").ok();
 
     let dir = tempfile::TempDir::new().unwrap();
@@ -152,7 +152,7 @@ fn test_claude_add_json_matches_our_entry() {
         eprintln!("SKIP test_claude_add_json_matches_our_entry: `claude` not on PATH");
         return;
     }
-    let guard = ENV_LOCK.lock().unwrap();
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let prior = std::env::var("CLAUDE_CONFIG_DIR").ok();
 
     let dir = tempfile::TempDir::new().unwrap();

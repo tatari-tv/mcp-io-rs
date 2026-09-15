@@ -28,11 +28,19 @@ enum McpSub {
     Register {
         #[arg(long, value_enum, default_value = "user", ignore_case = true)]
         target: Target,
+        /// Replace the entry under this server key even when it was NOT registered
+        /// by this build (the default refuses, so a re-used key is never clobbered).
+        #[arg(long)]
+        force: bool,
     },
     /// Remove this server's entry from a Claude config target.
     Unregister {
         #[arg(long, value_enum, default_value = "user", ignore_case = true)]
         target: Target,
+        /// Remove the entry under this server key even when it was NOT registered
+        /// by this build (the intentional-cleanup path).
+        #[arg(long)]
+        force: bool,
     },
     /// Report where this server is registered.
     Status,
@@ -60,8 +68,8 @@ impl McpCmd {
         );
         match &self.cmd {
             McpSub::Serve => run_serve(io, build),
-            McpSub::Register { target } => crate::register::register(io, *target),
-            McpSub::Unregister { target } => crate::register::unregister(io, *target),
+            McpSub::Register { target, force } => crate::register::register(io, *target, *force),
+            McpSub::Unregister { target, force } => crate::register::unregister(io, *target, *force),
             McpSub::Status => crate::register::status(io, build),
             McpSub::Bundle { out } => run_bundle(io, out.clone(), build),
         }

@@ -9,7 +9,8 @@ use tempfile::NamedTempFile;
 
 use crate::McpIo;
 use crate::error::{Error, Result};
-use crate::register::claude::entry_json;
+use crate::register::Ownership;
+use crate::register::claude::{SERVE_ARGS, STDIO, entry_json};
 
 /// The `mcpServers` key. Named once so read (status), splice, and remove agree.
 const MCP_SERVERS: &str = "mcpServers";
@@ -164,6 +165,81 @@ pub(crate) fn key_present(path: &Path, key: &str) -> bool {
             false
         }
     }
+}
+
+/// Read-only ownership check for one config file: is `io.server_key`'s EXISTING
+/// entry one that WE wrote? "Ours" iff all three hold:
+///   - `type` is absent OR equal to `"stdio"` (absent-or-stdio, not required: a
+///     `.mcpb` bundle-installed entry carries only `command` + `args`, and
+///     demanding a present `type` would make our own bundle read foreign),
+///   - `args` is exactly [`SERVE_ARGS`],
+///   - the `command`'s BASENAME is `io.bin` or the basename of `current_exe()`.
+///
+/// Basename, not the full path: `bin/install` lands the binary in `~/.local/bin`
+/// while `cargo install --path .` lands it in `~/.cargo/bin`, and a full-path
+/// compare would call our own entry foreign after a reinstall from the other path.
+/// `env` is ignored entirely -- it legitimately varies per host (slack-cli bakes
+/// `VALET_URL` in). Compared against `io.bin` rather than `io.server_key` so the
+/// predicate stays correct if a `--key` flag ever lands.
+///
+/// Every undefined ENTRY shape resolves toward [`Ownership::Foreign`] (missing or
+/// non-string `command`, wrong `args`, a non-stdio `type`). An unreadable or
+/// malformed FILE reports [`Ownership::Absent`], because no destructive path
+/// follows it: the desktop writer re-reads and fails loudly with
+/// [`Error::MalformedConfig`], and the Claude Code path's `remove` only fires when
+/// [`super::is_registered`] (same read) says the key is there.
+pub(crate) fn entry_is_ours(io: &McpIo, path: &Path) -> Ownership {
+    let config = match read_config(path) {
+        Ok(config) => config,
+        Err(e) => {
+            warn!("entry_is_ours: cannot read {}: {e}", path.display());
+            return Ownership::Absent;
+        }
+    };
+    let entry = match config.get(MCP_SERVERS) {
+        Some(Value::Object(servers)) => match servers.get(&io.server_key) {
+            Some(entry) => entry,
+            None => return Ownership::Absent,
+        },
+        _ => return Ownership::Absent,
+    };
+
+    let type_ok = match entry.get("type") {
+        None => true,
+        Some(value) => value.as_str() == Some(STDIO),
+    };
+    let args_ok = match entry.get("args").and_then(Value::as_array) {
+        Some(args) => {
+            args.len() == SERVE_ARGS.len() && args.iter().zip(SERVE_ARGS).all(|(a, want)| a.as_str() == Some(want))
+        }
+        None => false,
+    };
+    let command = entry.get("command").and_then(Value::as_str);
+    let command_ok = match command.and_then(basename) {
+        Some(base) => base == io.bin || Some(base) == super::current_exe_basename().as_deref(),
+        None => false,
+    };
+
+    debug!(
+        "entry_is_ours: path={} key={} type_ok={type_ok} args_ok={args_ok} command_ok={command_ok}",
+        path.display(),
+        io.server_key
+    );
+    if type_ok && args_ok && command_ok {
+        Ownership::Ours
+    } else {
+        Ownership::Foreign {
+            command: command.map(str::to_string),
+        }
+    }
+}
+
+/// The file-name component of a registered `command`, which may be an absolute
+/// path (`/home/me/.local/bin/slack`) or a bare name (`clyde`, as Claude Desktop
+/// writes it). `None` when the string has no file-name component at all (`/`, `..`)
+/// or is not UTF-8-representable, which reads as Foreign.
+fn basename(command: &str) -> Option<&str> {
+    Path::new(command).file_name().and_then(std::ffi::OsStr::to_str)
 }
 
 /// Atomic, permission-preserving write: serialize `config` (pretty + trailing
