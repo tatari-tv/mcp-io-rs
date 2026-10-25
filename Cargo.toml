@@ -1,6 +1,6 @@
 [package]
 name = "mcp-io"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 authors = ["Scott Idler <scott.idler@tatari.tv>"]
 description = "Shared library giving any Tatari CLI a local stdio MCP server via one `mcp` subcommand"
@@ -19,7 +19,7 @@ serde_json = { version = "1.0.150", features = ["preserve_order"] }
 tempfile = "3.27.0"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "io-std", "macros"] }
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.1.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 eyre = "0.6.12"
