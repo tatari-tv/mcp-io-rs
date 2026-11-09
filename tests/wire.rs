@@ -29,7 +29,7 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 
 use mcp_io::{init_logging, serve};
-use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo};
+use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
 
 /// Server identity is pinned to LITERALS, deliberately not `env!("CARGO_PKG_VERSION")`.
@@ -59,11 +59,11 @@ impl WireServer {
 
 #[tool_handler]
 impl ServerHandler for WireServer {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         // `.with_server_info` is mandatory: rmcp's `Implementation::from_build_env()`
         // expands `env!("CARGO_CRATE_NAME")` inside rmcp itself, so a handler that
         // skips this reports its name to the client as "rmcp". See the README.
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new(SERVER_NAME, SERVER_VERSION))
             .with_instructions(INSTRUCTIONS.to_string())
     }
