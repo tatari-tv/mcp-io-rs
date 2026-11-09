@@ -6,7 +6,7 @@ use std::ffi::OsString;
 use std::fs;
 
 use rmcp::ServerHandler;
-use rmcp::model::{Implementation, ServerInfo};
+use rmcp::model::{Implementation, ServerConfig};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -26,8 +26,8 @@ impl ServerHandler for DummyHandler {}
 /// called `.with_server_info(Implementation::new(bin, ..))`.
 struct NamedHandler(String);
 impl ServerHandler for NamedHandler {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::default().with_server_info(Implementation::new(self.0.clone(), "0.0.0"))
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::default().with_server_info(Implementation::new(self.0.clone(), "0.0.0"))
     }
 }
 

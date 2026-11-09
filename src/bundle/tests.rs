@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
-use rmcp::model::{CallToolResult, ContentBlock, ServerInfo};
+use rmcp::model::{CallToolResult, ContentBlock, ServerConfig};
 use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
 
 // Deliberately NOT `use super::*`: bundle.rs's `crate::Result` alias would
@@ -35,8 +35,8 @@ impl FakeHandler {
 
 #[tool_handler]
 impl ServerHandler for FakeHandler {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::default()
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::default()
     }
 }
 

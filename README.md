@@ -90,8 +90,8 @@ impl SlackMcpServer {
 
 #[rmcp::tool_handler]
 impl rmcp::ServerHandler for SlackMcpServer {
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        rmcp::model::ServerInfo::default()
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        rmcp::model::ServerConfig::default()
             // REQUIRED -- see below.
             .with_server_info(rmcp::model::Implementation::new("slack", env!("CARGO_PKG_VERSION")))
     }
