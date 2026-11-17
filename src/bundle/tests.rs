@@ -128,3 +128,32 @@ async fn test_bundle_manifest_fields_match_mcp_io() {
         serde_json::json!(["mcp", "serve"])
     );
 }
+
+/// The bundled server binary must keep its executable bit. An MCP host unpacks the `.mcpb` and
+/// runs `server/<bin>` directly, so a zip writer that dropped or changed the Unix mode would ship
+/// a bundle that installs but cannot start. `write_bundle` sets `unix_permissions(0o755)`; assert
+/// it survives the round trip through the zip crate, since the manifest-shape tests above never
+/// look at the entry's mode.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_bundled_server_binary_keeps_the_executable_bit() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("fake.mcpb");
+    bundle(&make_io(), Some(out.clone()), FakeHandler).await.unwrap();
+
+    let file = std::fs::File::open(&out).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let entry = zip.by_name("server/fake").unwrap();
+    let mode = entry.unix_mode().expect("server/fake must carry a Unix mode");
+    assert_eq!(
+        mode & 0o777,
+        0o755,
+        "server/fake must be rwxr-xr-x inside the bundle, got {:o}",
+        mode & 0o777
+    );
+    assert!(
+        mode & 0o111 == 0o111,
+        "server/fake must be executable by owner, group and other, got {:o}",
+        mode & 0o777
+    );
+}
